@@ -160,6 +160,11 @@ const SectionKnob: React.FC<{
         thumb="secondary"
         scale={scale}
         defaultValue={defaultValue}
+        // The deck itself only opens via right-click on the Spread/Align
+        // group; a knob inside it doing its own reset on the same gesture
+        // would fight that (and re-toggle the deck closed on the same
+        // click). Cmd/Ctrl-click reset still works normally.
+        disableRightClickReset
         help={help}
         onDragStateChange={onDragStateChange}
       />

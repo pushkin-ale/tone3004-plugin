@@ -204,6 +204,7 @@ export const AlignGroup: React.FC = () => {
                 scale={offsetMsScale}
                 defaultValue={0.5}
                 onReset={resetDeck}
+                disableRightClickReset
                 help={HELP.alignOffset}
                 onDragStateChange={onOffsetDrag}
               />

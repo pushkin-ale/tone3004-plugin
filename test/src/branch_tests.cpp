@@ -46,7 +46,7 @@ TEST(ChainBranchTest, RequiresStereoAndValidToneBlock) {
   // Mono mode: no second chain to branch.
   EXPECT_FALSE(proc.setChainBranch("left", "whatever"));
 
-  proc.setStereoMode(true);
+  proc.setChainCount(2);
   // Unknown block id.
   EXPECT_FALSE(proc.setChainBranch("left", "not-a-block"));
 
@@ -319,14 +319,14 @@ TEST(ChainBranchTest, FollowsSwapChainsAndSurvivesMonoRoundTrip) {
 
   // Stereo off makes the branch dormant: hidden from the state (mono mode
   // has no branch UI) but retained, so it re-engages when stereo comes back.
-  proc.setStereoMode(false);
+  proc.setChainCount(1);
   EXPECT_FALSE(proc.getChainState(-1)["branch"].isObject());
 
   // A dormant branch doesn't constrain the input fold…
   proc.setInputMode(TONE3000Processor::InputMode::Stereo);
   EXPECT_EQ(proc.getInputMode(), TONE3000Processor::InputMode::Stereo);
 
-  proc.setStereoMode(true);
+  proc.setChainCount(2);
   {
     const juce::var state = proc.getChainState(-1);
     ASSERT_TRUE(state["branch"].isObject());
@@ -344,9 +344,9 @@ TEST(ChainBranchTest, ClearsWhenTappedBlockRemovedWhileDormant) {
 
   // Removing the tapped block while the branch lies dormant in mono mode
   // must not leave a stale id behind for the next stereo session.
-  proc.setStereoMode(false);
+  proc.setChainCount(1);
   ASSERT_TRUE(proc.removeChainBlock("blk-a"));
-  proc.setStereoMode(true);
+  proc.setChainCount(2);
   EXPECT_FALSE(proc.getChainState(-1)["branch"].isObject());
 }
 

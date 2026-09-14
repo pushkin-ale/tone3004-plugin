@@ -16,19 +16,20 @@ import {
   BranchElbow,
   EdgeFade,
   GalleryLane,
+  LANE_CONTROLS_GAP,
+  LANE_CONTROLS_WIDTH,
   LANE_GAP,
-  STEREO_TILE_SIZE,
-  StereoPanRail,
   TILE_GAP,
-  TILE_SIZE,
   EDGE_FADE_WIDTH,
   gapCenterX,
+  tileSizeForChainCount,
+  useChainLaneStrips,
 } from './GalleryLane';
 import { useChainActions } from '../hooks/useChainActions';
 import { useHorizontalWheelScroll } from '../hooks/useHorizontalWheelScroll';
 import { FONT_MONO, WHITE } from './theme';
 import type { ChainBranch, ChainItem, ChainSide, ToneBlock } from '../types/chain';
-import { isInsertSlot } from '../types/chain';
+import { isInsertSlot, laneIdForIndex } from '../types/chain';
 
 /**
  * Chain gallery: blocks render as square image tiles in horizontal,
@@ -37,12 +38,13 @@ import { isInsertSlot } from '../types/chain';
  * tile away reveals the rail behind its slot. (Lane internals live in
  * GalleryLane.tsx; this component owns the drag orchestration.)
  *
- * Mono shows one lane; stereo shows both L/R lanes in a single shared
- * scroll area with the pan/link/swap rail on the left. One drag context
- * spans both lanes and the lane lists are mirrored into optimistic local
- * state, so cross-lane drags reflow the target lane live (onDragOver) and
- * drops land without any snap-back while the native roundtrip completes.
- * Tap/click opens the detail takeover; drag a tile to reorder.
+ * chainCount 1 shows a single lane; 2-4 stack every active lane in a single
+ * shared scroll area, with the per-lane pan/level/solo/invert rail (plus the
+ * lanes-0/1-only link/swap pill) on the left. One drag context spans every
+ * active lane and the lane lists are mirrored into optimistic local state,
+ * so cross-lane drags reflow the target lane live (onDragOver) and drops
+ * land without any snap-back while the native roundtrip completes. Tap/click
+ * opens the detail takeover; drag a tile to reorder.
  */
 
 /**
@@ -61,14 +63,21 @@ export const DETAIL_BLOCK_STORAGE_KEY = 't3k.detailBlockId';
 export const CHAIN_SCROLL_STORAGE_KEY = 't3k.chainScroll';
 
 interface ChainViewProps {
-  /** Left lane (the only lane in mono mode). */
+  /** Lane 0 (the only lane at chainCount 1). */
   chain: ChainItem[];
-  /** Right lane, or null while mono. */
+  /** Lane 1, or null below chainCount 2. */
   chainRight: ChainItem[] | null;
-  /** Active branch (stereo only), or null when the chains are independent. */
+  /** Lane 2, or null below chainCount 3. */
+  chain3?: ChainItem[] | null;
+  /** Lane 3, or null below chainCount 4. */
+  chain4?: ChainItem[] | null;
+  /** Number of active parallel chains, 1-4. */
+  chainCount: 1 | 2 | 3 | 4;
+  /** Active branch (lanes 0/1 only, chainCount 2 exactly), or null when the
+      chains are independent. */
   branch: ChainBranch | null;
-  /** Stereo chains on a rig that can't reproduce stereo: native sums them
-      to mono. The pan rail dims its pans and shows the MONO chip. */
+  /** Lanes 0/1 on a rig that can't reproduce stereo: native sums them
+      to mono. The pan rail dims their pans and shows the MONO chip. */
   monoSum: boolean;
   /** Whether the native block clipboard holds a copied block (enables Paste
       on insert slots). Survives preset switches: the clipboard snapshot is
@@ -108,7 +117,9 @@ const sensors: Sensors = [
   KeyboardSensor,
 ];
 
-type Lanes = Record<ChainSide, ChainItem[]>;
+/** Array-indexed lane mirror (index = lane index 0-3), replacing the old
+    2-lane `Record<ChainSide, ...>` shape now that up to 4 lanes are active. */
+type Lanes = ChainItem[][];
 
 /** Id of the ⌥-duplicate stand-in: the inert copy of the dragged block that
     holds its home slot while the standard drag machinery runs untouched. */
@@ -117,6 +128,9 @@ const DUP_STAND_IN_ID = '__duplicate-stand-in__';
 export const ChainView: React.FC<ChainViewProps> = ({
   chain,
   chainRight,
+  chain3 = null,
+  chain4 = null,
+  chainCount,
   branch,
   monoSum,
   canPaste,
@@ -175,14 +189,28 @@ export const ChainView: React.FC<ChainViewProps> = ({
   /** ⌥ held during the current drag; the drop duplicates instead of moving. */
   const altDragRef = useRef(false);
 
+  /** Native lane contents by index, padded to 4 entries (dormant lanes past
+      chainCount read as empty arrays). */
+  const nativeLanes: Lanes = [chain, chainRight ?? [], chain3 ?? [], chain4 ?? []];
+
+  /** Last real (non-insert) block per lane, for that lane's meter — resolved
+      against native order (not the optimistic drag mirror) since meter ids
+      key off native block identity regardless of in-flight reordering. */
+  const lastBlockIds: (string | null)[] = nativeLanes.map((items) => {
+    const real = items.filter((item): item is ToneBlock => !isInsertSlot(item));
+    return real.length > 0 ? real[real.length - 1].blockId : null;
+  });
+  const tileSize = tileSizeForChainCount(chainCount);
+  const laneStrips = useChainLaneStrips(chainCount, monoSum, lastBlockIds, tileSize);
+
   /**
-   * Optimistic mirror of both lanes. Drag gestures mutate this immediately
+   * Optimistic mirror of every lane. Drag gestures mutate this immediately
    * (live cross-lane reflow via onDragOver, final order on drop) so nothing
    * snaps back while the native mutation + resync roundtrip completes; it
    * resyncs from props whenever native reports a new state and no drag is
    * in flight.
    */
-  const [lanes, setLanes] = useState<Lanes>({ left: chain, right: chainRight ?? [] });
+  const [lanes, setLanes] = useState<Lanes>(nativeLanes);
   const draggingRef = useRef(false);
 
   // Resync the optimistic lanes only when native actually reports new state
@@ -190,23 +218,22 @@ export const ChainView: React.FC<ChainViewProps> = ({
   // earlier version included it and unconditionally set a fresh object, which
   // re-triggered itself in a silent render loop.
   useEffect(() => {
-    if (!draggingRef.current) setLanes({ left: chain, right: chainRight ?? [] });
-  }, [chain, chainRight]);
+    if (!draggingRef.current) setLanes([chain, chainRight ?? [], chain3 ?? [], chain4 ?? []]);
+  }, [chain, chainRight, chain3, chain4]);
 
-  /** Lane containing the id in the optimistic local state. */
-  const laneOf = (id: string): ChainSide | null => {
-    if (lanes.left.some((item) => item.blockId === id)) return 'left';
-    if (lanes.right.some((item) => item.blockId === id)) return 'right';
-    return null;
+  /** Index of the lane containing the id in the optimistic local state. */
+  const laneOf = (id: string): number | null => {
+    const index = lanes.findIndex((lane) => lane.some((item) => item.blockId === id));
+    return index === -1 ? null : index;
   };
-  /** Lane containing the id per native state (the pre-drag origin). */
-  const originLaneOf = (id: string): ChainSide | null => {
-    if (chain.some((item) => item.blockId === id)) return 'left';
-    if (chainRight?.some((item) => item.blockId === id)) return 'right';
-    return null;
+  /** Index of the lane containing the id per native state (the pre-drag
+      origin). */
+  const originLaneOf = (id: string): number | null => {
+    const index = nativeLanes.findIndex((lane) => lane.some((item) => item.blockId === id));
+    return index === -1 ? null : index;
   };
 
-  const resetLanes = () => setLanes({ left: chain, right: chainRight ?? [] });
+  const resetLanes = () => setLanes(nativeLanes);
 
   /**
    * Insert (or remove) the ⌥-duplicate stand-in: an inert copy of the
@@ -219,14 +246,17 @@ export const ChainView: React.FC<ChainViewProps> = ({
    */
   const setDuplicateStandIn = (item: ChainItem | null) =>
     setLanes(() => {
-      const left = [...chain];
-      const right = [...(chainRight ?? [])];
+      const next = nativeLanes.map((lane) => [...lane]);
       if (item != null) {
-        const lane = left.some((i) => i.blockId === item.blockId) ? left : right;
-        const index = lane.findIndex((i) => i.blockId === item.blockId);
-        if (index !== -1) lane.splice(index, 0, { ...item, blockId: DUP_STAND_IN_ID });
+        for (const lane of next) {
+          const index = lane.findIndex((i) => i.blockId === item.blockId);
+          if (index !== -1) {
+            lane.splice(index, 0, { ...item, blockId: DUP_STAND_IN_ID });
+            break;
+          }
+        }
       }
-      return { left, right };
+      return next;
     });
 
   // ⌥ tracking rides pointermove (drags move constantly, and the webview can
@@ -248,15 +278,16 @@ export const ChainView: React.FC<ChainViewProps> = ({
       window.removeEventListener('keydown', track);
       window.removeEventListener('keyup', track);
     };
-    // setDuplicateStandIn closes over chain/chainRight; those are stable for
-    // the life of a drag (native doesn't push mid-gesture).
+    // setDuplicateStandIn closes over nativeLanes (chain/chainRight/chain3/
+    // chain4); those are stable for the life of a drag (native doesn't push
+    // mid-gesture).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeDrag]);
 
   const handleDragStart = (event: DragStartEvent, manager: DragDropManager) => {
     draggingRef.current = true;
     const id = String(event.operation.source?.id);
-    setActiveDrag([...lanes.left, ...lanes.right].find((i) => i.blockId === id) ?? null);
+    setActiveDrag(lanes.flat().find((i) => i.blockId === id) ?? null);
     // Seed from the press that started the drag; the tracker effect keeps it
     // live from here (and inserts the stand-in once activeDrag lands).
     const activator = manager.dragOperation.activatorEvent;
@@ -276,7 +307,7 @@ export const ChainView: React.FC<ChainViewProps> = ({
     const activeId = String(source.id);
     const from = laneOf(activeId);
     const to = laneOf(String(target.id));
-    if (!from || !to || from === to) return;
+    if (from == null || to == null || from === to) return;
     event.preventDefault();
 
     // Insert slots are lane anchors and stay put.
@@ -289,12 +320,13 @@ export const ChainView: React.FC<ChainViewProps> = ({
     const landAfter = dragged != null && target.shape != null && dragged.x > target.shape.center.x;
 
     setLanes((prev) => {
-      const fromItems = prev[from].filter((i) => i.blockId !== activeId);
-      const toItems = [...prev[to]];
+      const next = prev.map((lane) => [...lane]);
+      next[from] = next[from].filter((i) => i.blockId !== activeId);
+      const toItems = next[to];
       const overIndex = toItems.findIndex((i) => i.blockId === String(target.id));
       const insertIndex = overIndex === -1 ? toItems.length : overIndex + (landAfter ? 1 : 0);
       toItems.splice(insertIndex, 0, item);
-      return { ...prev, [from]: fromItems, [to]: toItems };
+      return next;
     });
     // Same stabilization OptimisticSortingPlugin applies after its own moves:
     // park the drop target on the source and hold collision detection until
@@ -318,18 +350,22 @@ export const ChainView: React.FC<ChainViewProps> = ({
     }
 
     const activeId = String(source.id);
-    const side = laneOf(activeId);
-    if (!side) return;
+    const laneIndex = laneOf(activeId);
+    if (laneIndex == null) return;
 
     // Final same-lane placement: cross-lane moves already landed in
     // onDragOver, and source.index is the optimistic index the drag settled
     // on (the sortable plugin keeps it live during the gesture).
-    let laneItems = lanes[side];
+    let laneItems = lanes[laneIndex];
     const oldIndex = laneItems.findIndex((i) => i.blockId === activeId);
     const newIndex = Math.min(source.index, laneItems.length - 1);
     if (oldIndex !== -1 && oldIndex !== newIndex) {
       laneItems = arrayMove(laneItems, oldIndex, newIndex);
-      setLanes((prev) => ({ ...prev, [side]: laneItems }));
+      setLanes((prev) => {
+        const next = [...prev];
+        next[laneIndex] = laneItems;
+        return next;
+      });
     }
     const finalIndex = laneItems.findIndex((i) => i.blockId === activeId);
 
@@ -338,7 +374,7 @@ export const ChainView: React.FC<ChainViewProps> = ({
     // counts the original staying put; the optimistic lanes match the
     // post-clone chain pixel-for-pixel until the resync swaps in real ids.
     if (duplicating && finalIndex !== -1 && !isInsertSlot(laneItems[finalIndex])) {
-      actions.duplicateBlock(activeId, side, finalIndex);
+      actions.duplicateBlock(activeId, laneIdForIndex(laneIndex), finalIndex);
       return;
     }
 
@@ -346,11 +382,11 @@ export const ChainView: React.FC<ChainViewProps> = ({
     // a same-lane shuffle is one reorder. The chainChanged resync converges
     // the optimistic state.
     const origin = originLaneOf(activeId);
-    if (origin && origin !== side) {
-      actions.moveBlock(activeId, side, finalIndex);
+    if (origin != null && origin !== laneIndex) {
+      actions.moveBlock(activeId, laneIdForIndex(laneIndex), finalIndex);
       return;
     }
-    const nativeIds = (side === 'left' ? chain : (chainRight ?? [])).map((i) => i.blockId);
+    const nativeIds = nativeLanes[laneIndex].map((i) => i.blockId);
     const localIds = laneItems.map((i) => i.blockId);
     if (nativeIds.join() !== localIds.join()) actions.reorderBlocks(localIds);
   };
@@ -360,9 +396,11 @@ export const ChainView: React.FC<ChainViewProps> = ({
   // the gallery.
   const detailBlock =
     detailBlockId != null
-      ? ([...chain, ...(chainRight ?? [])].find(
-          (item): item is ToneBlock => !isInsertSlot(item) && item.blockId === detailBlockId
-        ) ?? null)
+      ? (nativeLanes
+          .flat()
+          .find(
+            (item): item is ToneBlock => !isInsertSlot(item) && item.blockId === detailBlockId
+          ) ?? null)
       : null;
 
   // Drop an id whose block vanished: left alone it lingers in state and
@@ -375,9 +413,8 @@ export const ChainView: React.FC<ChainViewProps> = ({
     // Another enabled+loaded NAM after this block in its lane. This mirrors the
     // DSP's lastNamIndex scan (Processor.cpp): with calibration on, such a
     // block hands off at calibrated output level instead of normalizing.
-    const detailLane = chain.some((item) => item.blockId === detailBlock.blockId)
-      ? chain
-      : (chainRight ?? []);
+    const detailLane =
+      nativeLanes.find((lane) => lane.some((item) => item.blockId === detailBlock.blockId)) ?? [];
     const detailIndex = detailLane.findIndex((item) => item.blockId === detailBlock.blockId);
     const namDownstream = detailLane
       .slice(detailIndex + 1)
@@ -415,8 +452,10 @@ export const ChainView: React.FC<ChainViewProps> = ({
     );
   }
 
-  const stereo = chainRight != null;
-  const tileSize = stereo ? STEREO_TILE_SIZE : TILE_SIZE;
+  const monoOnly = chainCount === 1;
+  // Branching (and the affordances that go with it) is a lanes-0/1-only
+  // concept, and only while exactly 2 lanes are active — not "2 or more".
+  const branchable = chainCount === 2;
 
   // Branched layout: the branch lane starts at the trunk's tap gap, so its
   // row is indented past the whole trunk prefix (matching the signal flow:
@@ -424,41 +463,61 @@ export const ChainView: React.FC<ChainViewProps> = ({
   // lane state; a stale tap id (mid-resync after the tapped block moved)
   // renders as independent lanes until native's cleared state arrives.
   const branchLayout = (() => {
-    if (!stereo || branch == null) return null;
-    const tapIndex = lanes[branch.side].findIndex((i) => i.blockId === branch.afterBlockId);
+    if (!branchable || branch == null) return null;
+    const trunkIndex = branch.side === 'left' ? 0 : 1;
+    const tapIndex = lanes[trunkIndex].findIndex((i) => i.blockId === branch.afterBlockId);
     if (tapIndex === -1) return null;
     return {
-      trunkSide: branch.side,
+      trunkIndex,
+      // Unaffected by each lane's own controls-strip slot: both the trunk
+      // and branch lane's GalleryLane render that slot at the same fixed
+      // width, so it's already baked equally into both lanes' natural tile
+      // start x — only the delta past that shared base needs expressing here.
       indentPx: (tapIndex + 1) * (tileSize + TILE_GAP),
       tapGapX: gapCenterX(tapIndex + 1, tileSize),
     };
   })();
+  // BranchElbow is positioned in the outer lanes-column coordinate space
+  // (not inside any one lane's own box), so unlike indentPx above it does
+  // need the controls-strip slot added explicitly: every lane's tiles start
+  // this far past the column's left edge once the strip renders.
+  const laneControlsOffset = chainCount >= 2 ? LANE_CONTROLS_WIDTH + LANE_CONTROLS_GAP : 0;
 
-  const lane = (side: ChainSide) => (
-    <div
-      style={{
-        marginLeft:
-          branchLayout != null && side !== branchLayout.trunkSide
-            ? `${branchLayout.indentPx}rem`
-            : 0,
-        width: 'max-content',
-      }}
-    >
-      <GalleryLane
-        items={lanes[side]}
-        tileSize={tileSize}
-        stereo={stereo}
-        onOpen={setDetailBlockId}
-        onAdd={(insertBlockId) => actions.addModel(side, insertBlockId)}
-        onPasteBlock={canPaste ? (index) => actions.pasteBlock(side, index) : null}
-        side={side}
-        branch={branchLayout != null ? branch : null}
-        branchInteractive={stereo && activeDrag == null}
-        onSetBranch={(afterBlockId) => actions.setBranch(side, afterBlockId)}
-        onClearBranch={actions.clearBranch}
-      />
-    </div>
-  );
+  const lane = (index: number) => {
+    const isPairLane = index < 2;
+    const chainSide: ChainSide = index === 0 ? 'left' : 'right';
+    return (
+      <div
+        key={index}
+        style={{
+          marginLeft:
+            branchLayout != null && index !== branchLayout.trunkIndex
+              ? `${branchLayout.indentPx}rem`
+              : 0,
+          width: 'max-content',
+        }}
+      >
+        <GalleryLane
+          items={lanes[index]}
+          tileSize={tileSize}
+          stereo={isPairLane && branchable}
+          onOpen={setDetailBlockId}
+          onAdd={(insertBlockId) => actions.addModel(laneIdForIndex(index), insertBlockId)}
+          onPasteBlock={
+            canPaste ? (position) => actions.pasteBlock(laneIdForIndex(index), position) : null
+          }
+          side={laneIdForIndex(index)}
+          branch={isPairLane && branchLayout != null ? branch : null}
+          branchInteractive={isPairLane && branchable && activeDrag == null}
+          onSetBranch={
+            isPairLane ? (afterBlockId) => actions.setBranch(chainSide, afterBlockId) : undefined
+          }
+          onClearBranch={isPairLane ? actions.clearBranch : undefined}
+          controls={laneStrips[index]}
+        />
+      </div>
+    );
+  };
 
   return (
     <div
@@ -471,7 +530,6 @@ export const ChainView: React.FC<ChainViewProps> = ({
         padding: '0 24rem',
       }}
     >
-      {stereo && <StereoPanRail monoSum={monoSum} />}
       <DragDropProvider
         sensors={sensors}
         onDragStart={handleDragStart}
@@ -486,7 +544,7 @@ export const ChainView: React.FC<ChainViewProps> = ({
               centered lane. left matches the lane's EDGE_FADE_WIDTH inset so
               the label lines up with the first tile; top is 0 because Plugin
               already applies the shared 24px middle-band pad. */}
-          {!stereo && (
+          {monoOnly && (
             <span
               style={{
                 position: 'absolute',
@@ -536,13 +594,12 @@ export const ChainView: React.FC<ChainViewProps> = ({
                 // a big down-right jump at pickup in DAW hosts.
               }}
             >
-              {lane('left')}
-              {stereo && lane('right')}
+              {Array.from({ length: chainCount }, (_, index) => lane(index))}
               {branchLayout != null && (
                 <BranchElbow
-                  x={EDGE_FADE_WIDTH + branchLayout.tapGapX}
+                  x={EDGE_FADE_WIDTH + laneControlsOffset + branchLayout.tapGapX}
                   tileSize={tileSize}
-                  trunkOnTop={branchLayout.trunkSide === 'left'}
+                  trunkOnTop={branchLayout.trunkIndex === 0}
                 />
               )}
             </div>

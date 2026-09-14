@@ -210,6 +210,7 @@ const HELP_DESKTOP = {
   imageCorrelation: 'Mono safety: dim: safe · yellow: caution · red: cancellation on mono sum.',
   spreadMonoOutput:
     'Spread: unavailable, the output is mono (mono track or one-channel output device).',
+  spreadMultiChain: 'Spread: unavailable while blending 3-4 chains.',
   alignOffset: knobHelp(
     'Offset',
     'corrective chain alignment, ≤24 ms toward L or R. Center: off. Right-click: advanced.'
@@ -232,8 +233,7 @@ const HELP_DESKTOP = {
   redo: 'Redo: re-apply undone edit.',
   settings: 'Settings: plugin and audio options.',
   account: 'Account: settings and TONE3000 sign-out.',
-  monoMode: 'Mono: one chain, both outputs.',
-  stereoMode: 'Stereo: independent Left/Right chains.',
+  chainCount: 'Chains: number of parallel chains, 1-4. Panned and blended into the output.',
 
   // Presets
   presetPrev: 'Previous Preset: step back through the list.',
@@ -264,14 +264,28 @@ const HELP_DESKTOP = {
   removeBlock: 'Remove: delete this block.',
   panLeft: knobHelp('Pan L', 'Left chain, hard left ↔ center.'),
   panRight: knobHelp('Pan R', 'Right chain, center ↔ hard right.'),
+  panLane3: knobHelp('Pan 3', 'Chain 3, hard left ↔ hard right.'),
+  panLane4: knobHelp('Pan 4', 'Chain 4, hard left ↔ hard right.'),
   panLink: 'Link Pans: mirror both pan knobs.',
   monoSum:
     'Mono output: both chains summed to one channel. Bal/S/Ø still shape the blend; pans are off.',
   panMonoSum: 'Pan: unavailable, the output is mono. The chains are summed instead (see MONO).',
+  levelLeft: knobHelp('Level L', 'Left chain level, ±24 dB.'),
+  levelRight: knobHelp('Level R', 'Right chain level, ±24 dB.'),
+  levelLane3: knobHelp('Level 3', 'Chain 3 level, ±24 dB.'),
+  levelLane4: knobHelp('Level 4', 'Chain 4 level, ±24 dB.'),
   soloLeft: 'Solo L: hear the Left chain alone.',
   soloRight: 'Solo R: hear the Right chain alone.',
+  soloLane3: 'Solo 3: hear Chain 3 alone.',
+  soloLane4: 'Solo 4: hear Chain 4 alone.',
   invertLeft: 'Invert L: flip the Left chain polarity. Fixes chains that hollow out or cancel.',
   invertRight: 'Invert R: flip the Right chain polarity. Fixes chains that hollow out or cancel.',
+  invertLane3: 'Invert 3: flip Chain 3 polarity. Fixes chains that hollow out or cancel.',
+  invertLane4: 'Invert 4: flip Chain 4 polarity. Fixes chains that hollow out or cancel.',
+  muteLeft: 'Mute L: silence the Left chain. Independent of the other chains’ mutes, and saved with the tone.',
+  muteRight: 'Mute R: silence the Right chain. Independent of the other chains’ mutes, and saved with the tone.',
+  muteLane3: 'Mute 3: silence Chain 3. Independent of the other chains’ mutes, and saved with the tone.',
+  muteLane4: 'Mute 4: silence Chain 4. Independent of the other chains’ mutes, and saved with the tone.',
   swapChains: 'Swap Chains: exchange Left/Right chains.',
   branchGap: 'Branch: feed the other chain from this point in this chain.',
   branchJunction: 'Branch Point: the other chain starts here. Click: make chains independent.',

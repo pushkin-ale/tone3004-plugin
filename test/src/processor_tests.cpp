@@ -122,7 +122,7 @@ TEST(ProcessorTest, StereoChainsFoldToMonoWithoutAStereoOutput) {
   // (before this, a mono track silently played the Left lane alone).
   TONE3000Processor proc;
   proc.setPlayConfigDetails(1, 1, kFs, 512);
-  proc.setStereoMode(true);
+  proc.setChainCount(2);
   proc.prepareToPlay(kFs, 512);
   EXPECT_FALSE(static_cast<bool>(proc.getChainState(-1)["stereoOutput"]));
 
@@ -164,7 +164,7 @@ TEST(ProcessorTest, StereoChainsFoldToMonoWithoutAStereoOutput) {
   // rig; the polarity null proves the fold ran here too.
   TONE3000Processor monoOutProc;
   monoOutProc.setPlayConfigDetails(2, 1, kFs, 512);
-  monoOutProc.setStereoMode(true);
+  monoOutProc.setChainCount(2);
   monoOutProc.prepareToPlay(kFs, 512);
   monoOutProc.parameters.getParameter("chainInvertRight")->setValueNotifyingHost(1.0f);
   juce::AudioBuffer<float> buffer(2, 512);

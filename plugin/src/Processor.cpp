@@ -48,6 +48,10 @@ TONE3000Processor::TONE3000Processor()
       ") | multiCore=" + juce::String(multiCoreEnabled.load() ? "on" : "off"));
 
   resolveParamRefs();
+  // Fresh instance: every preset-managed parameter already sits at its
+  // factory default, so that's the initial right-click baseline (until a
+  // preset/session load or a manual reset snapshots a new one).
+  snapshotPresetBaseline();
 
   // Age out unused drop-loaded model stash files and sweep IR temp files
   // leaked by older builds (both no-ops after the process's first instance).
@@ -73,7 +77,8 @@ TONE3000Processor::TONE3000Processor()
   midiMapper.onBlockPowerToggle = [this](int index, bool right) {
     toggleBlockPower(index, right);
   };
-  midiMapper.onStereoToggle = [this] { setStereoMode(!isStereoMode()); };
+  // MIDI stereo toggle only cycles 1<->2 lanes; it has no notion of 3/4.
+  midiMapper.onStereoToggle = [this] { setChainCount(isStereoMode() ? 1 : 2); };
 
   // Every lane starts at its minimum slot layout (kMinLaneSlots pass-through
   // insert placeholders). The right lane stays invisible until stereo mode is
@@ -114,6 +119,8 @@ void TONE3000Processor::resolveParamRefs() {
   paramRefs.chainSoloRight = get("chainSoloRight");
   paramRefs.chainInvertLeft = get("chainInvertLeft");
   paramRefs.chainInvertRight = get("chainInvertRight");
+  paramRefs.chainMuteLeft = get("chainMuteLeft");
+  paramRefs.chainMuteRight = get("chainMuteRight");
   paramRefs.toneBass = get("toneBass");
   paramRefs.toneMid = get("toneMid");
   paramRefs.toneTreble = get("toneTreble");
@@ -125,6 +132,15 @@ void TONE3000Processor::resolveParamRefs() {
   paramRefs.inputCalibrationLevel = get("inputCalibrationLevel");
   paramRefs.osEnabled = get("osEnabled");
   paramRefs.osFactor = get("osFactor");
+
+  laneMixParamRefs[0] = {paramRefs.chainPanLeft, get("chainLevelLeft"), paramRefs.chainSoloLeft,
+                         paramRefs.chainInvertLeft, paramRefs.chainMuteLeft};
+  laneMixParamRefs[1] = {paramRefs.chainPanRight, get("chainLevelRight"), paramRefs.chainSoloRight,
+                         paramRefs.chainInvertRight, paramRefs.chainMuteRight};
+  laneMixParamRefs[2] = {get("chainPanLane3"), get("chainLevelLane3"), get("chainSoloLane3"),
+                         get("chainInvertLane3"), get("chainMuteLane3")};
+  laneMixParamRefs[3] = {get("chainPanLane4"), get("chainLevelLane4"), get("chainSoloLane4"),
+                         get("chainInvertLane4"), get("chainMuteLane4")};
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout TONE3000Processor::createParameterLayout() {
@@ -248,6 +264,46 @@ juce::AudioProcessorValueTreeState::ParameterLayout TONE3000Processor::createPar
   layout.add(std::make_unique<juce::AudioParameterBool>(
       juce::ParameterID{"chainInvertRight", 33}, "chainInvertRight", false));
 
+  // Per-lane Level (blend path, chainCount > 2; see laneMixGains): a new
+  // trim that didn't exist before this feature, same ±24dB-around-0.5
+  // convention as mainStageGain. Lanes 0/1 get one too, for parity with
+  // lanes 2/3 once 3+ chains are blended (the <=2-lane path keeps using
+  // outputBalance/chainPanLeft/Right instead, untouched).
+  layout.add(normParam("chainLevelLeft", 36, 0.5f));
+  layout.add(normParam("chainLevelRight", 37, 0.5f));
+  layout.add(normParam("chainLevelLane3", 38, 0.5f));
+  layout.add(normParam("chainLevelLane4", 39, 0.5f));
+
+  // Lanes 3/4 pan/solo/invert: the same per-chain controls as
+  // chainPan/Solo/InvertLeft/Right above, extended to the blend path.
+  // Defaulting to center avoids presuming any particular spread; the user
+  // pans a 3rd/4th chain deliberately.
+  layout.add(normParam("chainPanLane3", 40, 0.5f));
+  layout.add(normParam("chainPanLane4", 41, 0.5f));
+  layout.add(std::make_unique<juce::AudioParameterBool>(
+      juce::ParameterID{"chainSoloLane3", 42}, "chainSoloLane3", false));
+  layout.add(std::make_unique<juce::AudioParameterBool>(
+      juce::ParameterID{"chainSoloLane4", 43}, "chainSoloLane4", false));
+  layout.add(std::make_unique<juce::AudioParameterBool>(
+      juce::ParameterID{"chainInvertLane3", 44}, "chainInvertLane3", false));
+  layout.add(std::make_unique<juce::AudioParameterBool>(
+      juce::ParameterID{"chainInvertLane4", 45}, "chainInvertLane4", false));
+
+  // Per-chain mutes: unconditionally silence a lane, independent of and
+  // additive with solo (a lane that's both muted and soloed stays silent —
+  // mute always wins, see imageMatrixGains/laneMixGains). Unlike solo,
+  // engaging one lane's mute has no effect on any other lane's mute.
+  // Unlike solo, mute IS captured by presets (presetParameterIds) — it's a
+  // deliberate per-lane mix decision, not transient audition state.
+  layout.add(std::make_unique<juce::AudioParameterBool>(
+      juce::ParameterID{"chainMuteLeft", 46}, "chainMuteLeft", false));
+  layout.add(std::make_unique<juce::AudioParameterBool>(
+      juce::ParameterID{"chainMuteRight", 47}, "chainMuteRight", false));
+  layout.add(std::make_unique<juce::AudioParameterBool>(
+      juce::ParameterID{"chainMuteLane3", 48}, "chainMuteLane3", false));
+  layout.add(std::make_unique<juce::AudioParameterBool>(
+      juce::ParameterID{"chainMuteLane4", 49}, "chainMuteLane4", false));
+
   // Oversampling (Advanced settings; see ChainOversampler.h). Deliberately
   // not automatable: a factor change rebuilds every NAM engine and
   // re-prepares the whole chain. Choice index i maps to factor 2^(i+1).
@@ -322,6 +378,10 @@ void TONE3000Processor::applyOversamplingSettings() {
   // resizes it.
   for (auto& scratch : laneDryScratch) {
     scratch.setSize(2, juce::jmax(1, chainDomainBlockSize()), false, false, true);
+    scratch.clear();
+  }
+  for (auto& scratch : laneOutputScratch) {
+    scratch.setSize(1, juce::jmax(1, chainDomainBlockSize()), false, false, true);
     scratch.clear();
   }
 
@@ -514,16 +574,21 @@ static float balanceChainGain(float balance, int chain) {
   return juce::Decibels::decibelsToGain(trimDb);
 }
 
-// The four gains of the post-chain image matrix: per-chain balance trims
-// multiplied into the constant-power pan gains. The balance applies to the
-// *chains* (pre-pan), so it matches chain levels rather than tilting the
-// output bus; an output-channel trim couldn't re-balance the chains once
-// the pan blend has mixed them. When pan is inactive (mono+spread) the pan
-// part is the identity and the matrix reduces to a diagonal L/R tilt.
-// A solo zeroes the other chain's trim (engaging one clears the other in
-// the UI; both on via MIDI leaves both audible), and a polarity invert
-// negates its chain's trim. Riding the matrix smoothers makes both
-// click-free: the mute glides, and a sign flip glides through zero.
+// The four gains of the post-chain image matrix: per-chain balance trims,
+// each further trimmed by that chain's Level (same ±24dB convention as
+// mainStageGain, unity at the 0.5 default so an untouched Level knob leaves
+// balance's own trim as the only factor), multiplied into the constant-power
+// pan gains. The balance applies to the *chains* (pre-pan), so it matches
+// chain levels rather than tilting the output bus; an output-channel trim
+// couldn't re-balance the chains once the pan blend has mixed them. When pan
+// is inactive (mono+spread) the pan part is the identity and the matrix
+// reduces to a diagonal L/R tilt. A solo zeroes the other chain's trim
+// (engaging one clears the other in the UI; both on via MIDI leaves both
+// audible); a mute unconditionally zeroes its own chain's trim regardless of
+// solo state (a chain that's both muted and soloed stays silent — mute
+// always wins); a polarity invert negates its chain's trim. Riding the
+// matrix smoothers makes both click-free: the mute glides, and a sign flip
+// glides through zero.
 //
 // `foldToMono` (stereo chains on a rig that can't reproduce stereo, see the
 // image stage) reconfigures the matrix into a mono sum: both chains land on
@@ -531,14 +596,20 @@ static float balanceChainGain(float balance, int chain) {
 // produces when it folds a stereo bus down to mono at the default hard
 // pans. The ½ keeps levels consistent across rigs: a rig moved from a
 // stereo to a mono track doesn't jump, and one chain duplicated into both
-// lanes sums back to its mono-mode level. Balance/solo/invert shape the
-// blend as usual; the pans are inert (the UI dims them).
+// lanes sums back to its mono-mode level. Balance/level/solo/mute/invert
+// shape the blend as usual; the pans are inert (the UI dims them).
 struct ImageGains { float lToL, lToR, rToL, rToR; };
 static ImageGains imageMatrixGains(bool panActive, bool foldToMono, float balance,
                                    float panLeft, float panRight, bool soloLeft,
-                                   bool soloRight, bool invertLeft, bool invertRight) {
-  float balL = soloRight && !soloLeft ? 0.0f : balanceChainGain(balance, 0);
-  float balR = soloLeft && !soloRight ? 0.0f : balanceChainGain(balance, 1);
+                                   bool soloRight, bool invertLeft, bool invertRight,
+                                   bool muteLeft, bool muteRight, float levelLeft,
+                                   float levelRight) {
+  float balL = (soloRight && !soloLeft) || muteLeft
+                   ? 0.0f
+                   : balanceChainGain(balance, 0) * mainStageGain(levelLeft);
+  float balR = (soloLeft && !soloRight) || muteRight
+                   ? 0.0f
+                   : balanceChainGain(balance, 1) * mainStageGain(levelRight);
   if (invertLeft)
     balL = -balL;
   if (invertRight)
@@ -551,6 +622,45 @@ static ImageGains imageMatrixGains(bool panActive, bool foldToMono, float balanc
     std::tie(pRtoL, pRtoR) = constantPowerPanGains(panRight);
   }
   return {balL * pLtoL, balL * pLtoR, balR * pRtoL, balR * pRtoR};
+}
+
+// The N-lane generalization of imageMatrixGains, for the blend path
+// (chainCount > 2, see processChainStage): each active lane's Level becomes
+// its linear gain (mainStageGain, same convention as balanceChainGain
+// above), zeroed by mute or by an unmatched solo (mute always wins, even
+// over solo — see the chainMute* doc comment in createParameterLayout),
+// negated on invert, then either split half-to-both channels (`foldToMono`,
+// mirroring imageMatrixGains' fold for a rig that can't reproduce stereo)
+// or panned with the same constant-power law used everywhere else in the
+// image stage. Unlike imageMatrixGains this has no balance term (balance is
+// a <=2-lane-only concept; Level is its N-lane replacement) and the gains
+// it returns are applied unsmoothed (Level/pan moves during playback on 3-4
+// blended lanes are expected to be rare production choices, not a
+// live-performance control).
+struct LaneMixGain { float toL, toR; };
+static void laneMixGains(int count, bool foldToMono, const std::array<float, kNumLanes>& pan,
+                         const std::array<float, kNumLanes>& level,
+                         const std::array<bool, kNumLanes>& solo,
+                         const std::array<bool, kNumLanes>& invert,
+                         const std::array<bool, kNumLanes>& mute,
+                         std::array<LaneMixGain, kNumLanes>& out) {
+  bool anySolo = false;
+  for (int i = 0; i < count; ++i)
+    anySolo = anySolo || solo[static_cast<size_t>(i)];
+
+  for (int i = 0; i < count; ++i) {
+    const auto idx = static_cast<size_t>(i);
+    float gain =
+        (mute[idx] || (anySolo && !solo[idx])) ? 0.0f : mainStageGain(level[idx]);
+    if (invert[idx])
+      gain = -gain;
+    if (foldToMono) {
+      out[idx] = {0.5f * gain, 0.5f * gain};
+    } else {
+      const auto [toL, toR] = constantPowerPanGains(pan[idx]);
+      out[idx] = {gain * toL, gain * toR};
+    }
+  }
 }
 
 // Stereo input = stereo main bus, minus the standalone case where it isn't
@@ -760,7 +870,7 @@ void TONE3000Processor::prepareToPlay(double sampleRate, int samplesPerBlock) {
   // resolution in processImageStage (stereoOutputDetected was just updated
   // above).
   {
-    const bool isStereo = stereoEnabled.load();
+    const bool isStereo = isStereoMode();
     const bool stereoRig = stereoOutputDetected.load();
     const bool monoFold = isStereo && !stereoRig;
     const bool applyBalance = isStereo || (cacheSpreadEnabled && stereoRig);
@@ -770,7 +880,11 @@ void TONE3000Processor::prepareToPlay(double sampleRate, int samplesPerBlock) {
                                     isStereo && cacheChainSoloLeft,
                                     isStereo && cacheChainSoloRight,
                                     isStereo && cacheChainInvertLeft,
-                                    isStereo && cacheChainInvertRight);
+                                    isStereo && cacheChainInvertRight,
+                                    isStereo && cacheChainMuteLeft,
+                                    isStereo && cacheChainMuteRight,
+                                    isStereo ? cacheLaneMix[0].level : 0.5f,
+                                    isStereo ? cacheLaneMix[1].level : 0.5f);
     for (auto* smoother : {&imageGainLtoL, &imageGainLtoR, &imageGainRtoL, &imageGainRtoR})
       smoother->reset(sampleRate, 0.02);
     imageGainLtoL.setCurrentAndTargetValue(g.lToL);
@@ -795,6 +909,10 @@ void TONE3000Processor::prepareToPlay(double sampleRate, int samplesPerBlock) {
   // carry more frames than the host block (e.g. a 44.1k host upsampled to 48k).
   for (auto& scratch : laneDryScratch) {
     scratch.setSize(2, chainDomainBlockSize(), false, false, true);
+    scratch.clear();
+  }
+  for (auto& scratch : laneOutputScratch) {
+    scratch.setSize(1, chainDomainBlockSize(), false, false, true);
     scratch.clear();
   }
   chainScratchChannel.setSize(1, samplesPerBlock, false, false, true);
@@ -949,6 +1067,18 @@ void TONE3000Processor::updateCachedParameters() {
   cacheChainSoloRight = loadBool(paramRefs.chainSoloRight);
   cacheChainInvertLeft = loadBool(paramRefs.chainInvertLeft);
   cacheChainInvertRight = loadBool(paramRefs.chainInvertRight);
+  cacheChainMuteLeft = loadBool(paramRefs.chainMuteLeft);
+  cacheChainMuteRight = loadBool(paramRefs.chainMuteRight);
+
+  for (int i = 0; i < kNumLanes; ++i) {
+    const auto& refs = laneMixParamRefs[static_cast<size_t>(i)];
+    auto& cache = cacheLaneMix[static_cast<size_t>(i)];
+    cache.pan = refs.pan->load();
+    cache.level = refs.level->load();
+    cache.solo = loadBool(refs.solo);
+    cache.invert = loadBool(refs.invert);
+    cache.mute = loadBool(refs.mute);
+  }
 }
 
 // ##########################
@@ -1321,6 +1451,41 @@ void TONE3000Processor::processLanePair(Lane& workerBlocks,
   processChainOnBuffer(workerBlocks, workerBuffer, workerScratch, workerBeginIdx);
 }
 
+// The N-way generalization of processLanePair, for the blend path
+// (chainCount > 2): every one of the first `count` lanes runs independently
+// over its own laneOutputScratch[i]/laneDryScratch[i] (already filled with
+// that lane's input by the processChainStage branch below), so there is no
+// pairing-up and all of them can fork across the pool in one call.
+void TONE3000Processor::processLaneGroup(int count) {
+  struct LaneGroupJob {
+    TONE3000Processor* proc;
+    int laneIndex;
+  };
+  std::array<LaneGroupJob, kNumLanes> jobs;
+  std::array<void*, kNumLanes> ctxs;
+  for (int i = 0; i < count; ++i) {
+    jobs[static_cast<size_t>(i)] = {this, i};
+    ctxs[static_cast<size_t>(i)] = &jobs[static_cast<size_t>(i)];
+  }
+
+  if (rtParallelLaneGroup) {
+    rtWorkerPool.forkJoin(
+        [](void* ctx) {
+          auto& j = *static_cast<LaneGroupJob*>(ctx);
+          const auto idx = static_cast<size_t>(j.laneIndex);
+          j.proc->processChainOnBuffer(j.proc->lane(j.laneIndex), j.proc->laneOutputScratch[idx],
+                                       j.proc->laneDryScratch[idx]);
+        },
+        ctxs.data(), count);
+    return;
+  }
+
+  for (int i = 0; i < count; ++i) {
+    const auto idx = static_cast<size_t>(i);
+    processChainOnBuffer(lane(i), laneOutputScratch[idx], laneDryScratch[idx]);
+  }
+}
+
 // ##############################
 // RT CHAIN STAGE (chain rate)
 // ##############################
@@ -1349,7 +1514,51 @@ void TONE3000Processor::processChainStage(float** inputs, float** outputs, int n
       std::memcpy(outputs[ch], inputs[ch], sizeof(float) * static_cast<size_t>(numFrames));
   }
 
-  if (rtStereoChains) {
+  if (rtChainCount > 2) {
+    // Blend path: no per-channel dual-mono split and no branching (branching
+    // is guarded out above 2 lanes; see setChainBranch/setChainCount) — every
+    // active lane runs on the same mono-summed input, then gets pan/level-
+    // summed into outputs[0]/outputs[1]. This is new code; the <=2-lane path
+    // below (rtStereoChains, or the plain mono chain) stays untouched.
+    const int count = rtChainCount;
+
+    float* mono = laneOutputScratch[0].getWritePointer(0);
+    for (int i = 0; i < numFrames; ++i)
+      mono[i] = 0.5f * (outputs[0][i] + outputs[1][i]);
+    for (int i = 1; i < count; ++i)
+      laneOutputScratch[static_cast<size_t>(i)].copyFrom(0, 0, laneOutputScratch[0], 0, 0,
+                                                          numFrames);
+
+    processLaneGroup(count);
+
+    std::array<float, kNumLanes> pan{}, level{};
+    std::array<bool, kNumLanes> solo{}, invert{}, mute{};
+    for (int i = 0; i < count; ++i) {
+      const auto idx = static_cast<size_t>(i);
+      pan[idx] = cacheLaneMix[idx].pan;
+      level[idx] = cacheLaneMix[idx].level;
+      solo[idx] = cacheLaneMix[idx].solo;
+      invert[idx] = cacheLaneMix[idx].invert;
+      mute[idx] = cacheLaneMix[idx].mute;
+    }
+    std::array<LaneMixGain, kNumLanes> gains{};
+    // rtChainChannels < 2 mirrors imageMatrixGains' foldToMono: a rig that
+    // can't reproduce stereo (mono host bus) still hears every lane, folded
+    // half-to-both instead of panned.
+    laneMixGains(count, rtChainChannels < 2, pan, level, solo, invert, mute, gains);
+
+    std::memset(outputs[0], 0, sizeof(float) * static_cast<size_t>(numFrames));
+    std::memset(outputs[1], 0, sizeof(float) * static_cast<size_t>(numFrames));
+    for (int i = 0; i < count; ++i) {
+      const auto idx = static_cast<size_t>(i);
+      const float* src = laneOutputScratch[idx].getReadPointer(0);
+      const auto g = gains[idx];
+      if (g.toL != 0.0f)
+        juce::FloatVectorOperations::addWithMultiply(outputs[0], src, g.toL, numFrames);
+      if (g.toR != 0.0f)
+        juce::FloatVectorOperations::addWithMultiply(outputs[1], src, g.toR, numFrames);
+    }
+  } else if (rtStereoChains) {
     if (rtBranchTapIndex >= 0) {
       // Branched routing: the trunk lane runs on its own channel; the branch
       // lane's input is the trunk's signal after the tapped block (not the
@@ -1431,10 +1640,19 @@ void TONE3000Processor::processImageStage(float* chL, float* chR, int numFrames,
   float* imageChannels[2] = {chL, chR};
   juce::AudioBuffer<float> image(imageChannels, 2, numFrames);
 
-  const bool spreadActive = cacheSpreadEnabled && stereoRig;
-  const bool monoFold = rtStereoChains && !stereoRig;
+  // Align, the auto-offset probe, the auto-balance tap, and the pinned
+  // balance/pan matrix below are all pairwise (lanes 0/1) concepts. For
+  // rtChainCount > 2 the pan/level mixing already happened inside
+  // processChainStage, so chL/chR arrive here pre-mixed; running any of
+  // this pairwise machinery on already-blended audio would be wrong, so it
+  // is gated to exactly the <= 2 lane path. Spread (mono ADT widening,
+  // count == 1 only) is unaffected and still runs below.
+  const bool pairwiseLanes = rtChainCount <= 2;
 
-  if (rtStereoChains) {
+  const bool spreadActive = cacheSpreadEnabled && stereoRig;
+  const bool monoFold = rtStereoChains && !stereoRig && pairwiseLanes;
+
+  if (rtStereoChains && pairwiseLanes) {
     spread.forceIdle();
 
     // Auto-align probe capture: the raw chain outputs BEFORE the align
@@ -1451,7 +1669,7 @@ void TONE3000Processor::processImageStage(float* chL, float* chR, int numFrames,
         cacheAlignEnabled);
     if (stereoOffset.isRunning())
       stereoOffset.process(image);
-  } else {
+  } else if (!rtStereoChains) {
     stereoOffset.forceIdle();
     spread.setTarget(
         SpreadParams::fromNormalized(cacheSpreadOffset, cacheSpreadWobble, cacheSpreadCrossover,
@@ -1460,15 +1678,21 @@ void TONE3000Processor::processImageStage(float* chL, float* chR, int numFrames,
         spreadActive);
     if (spread.isRunning())
       spread.process(image);
+  } else {
+    // rtChainCount > 2: neither Align nor Spread applies to the already-
+    // mixed bus; leave both engines idle.
+    stereoOffset.forceIdle();
+    spread.forceIdle();
   }
 
   // Auto balance listening tap: the raw chain outputs, before the balance
   // and pan gains, so the measurement is the chains' true mismatch. It must
   // sit pre-pan: post-pan the two channels converge as the pans approach
   // center even when the chains are badly mismatched, which would starve
-  // the measurement. Zero work unless armed.
-  if (autoBalanceState.load(std::memory_order_acquire) ==
-      static_cast<int>(AutoBalanceState::Listening))
+  // the measurement. Zero work unless armed (armed only ever at exactly 2
+  // lanes; pairwiseLanes guards against a mid-listen chain-count change).
+  if (pairwiseLanes && autoBalanceState.load(std::memory_order_acquire) ==
+                          static_cast<int>(AutoBalanceState::Listening))
     runAutoBalanceStage(image, numFrames);
 
   // The matrix has work only when two real output channels exist, or when
@@ -1477,7 +1701,9 @@ void TONE3000Processor::processImageStage(float* chL, float* chR, int numFrames,
   // chain mode, not the rig: two chains are worth auditioning and
   // re-polarizing inside the sum too. All four gains are smoothed so knob
   // moves AND the solo/invert/fold gating glide instead of stepping (pop).
-  if (stereoRig || monoFold) {
+  // For rtChainCount > 2 this is skipped entirely: laneMixGains already
+  // applied pan/level/solo/invert per lane inside processChainStage.
+  if (pairwiseLanes && (stereoRig || monoFold)) {
     const bool applyBalance = rtStereoChains || spreadActive;
     const auto g = imageMatrixGains(rtStereoChains && !monoFold, monoFold,
                                     applyBalance ? cacheOutputBalance : 0.5f,
@@ -1485,7 +1711,11 @@ void TONE3000Processor::processImageStage(float* chL, float* chR, int numFrames,
                                     rtStereoChains && cacheChainSoloLeft,
                                     rtStereoChains && cacheChainSoloRight,
                                     rtStereoChains && cacheChainInvertLeft,
-                                    rtStereoChains && cacheChainInvertRight);
+                                    rtStereoChains && cacheChainInvertRight,
+                                    rtStereoChains && cacheChainMuteLeft,
+                                    rtStereoChains && cacheChainMuteRight,
+                                    rtStereoChains ? cacheLaneMix[0].level : 0.5f,
+                                    rtStereoChains ? cacheLaneMix[1].level : 0.5f);
     imageGainLtoL.setTargetValue(g.lToL);
     imageGainLtoR.setTargetValue(g.lToR);
     imageGainRtoL.setTargetValue(g.rToL);
@@ -1622,7 +1852,7 @@ void TONE3000Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
   // mirror in the chain-stage loop feeds the probe to the Right lane);
   // losing the mode mid-run cancels (the atomic flip is audio-thread safe).
   // #########################
-  if (autoOffset.state() != AutoOffset::State::Idle && !stereoEnabled.load())
+  if (autoOffset.state() != AutoOffset::State::Idle && !isStereoMode())
     autoOffset.cancel();
   if (autoOffset.renderProbeInput(buffer.getWritePointer(0), numSamples) && numChannels > 1)
     buffer.copyFrom(1, 0, buffer, 0, 0, numSamples);
@@ -1654,7 +1884,8 @@ void TONE3000Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
     // Stereo chains follow the mode alone: on a mono rig both lanes still
     // run (the Right lane on the scratch channel) and the image stage sums
     // them, so a two-chain rig is heard in full instead of half.
-    rtStereoChains = stereoEnabled.load();
+    rtChainCount = getChainCount();
+    rtStereoChains = rtChainCount >= 2;
     rtChainChannels = juce::jmin(numChannels, 2);
 
     // One multi-core resolution per callback (under chainMutex): the phase
@@ -1667,7 +1898,7 @@ void TONE3000Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
         multiCoreEnabled.load(std::memory_order_relaxed) && rtWorkerPool.isRunning();
     rtPhasePool = multiCore ? &rtWorkerPool : nullptr;
     rtParallelLanes = false;
-    if (rtStereoChains && multiCore) {
+    if (rtChainCount == 2 && multiCore) {
       if (rtBranchTapIndex >= 0) {
         const ChainSide branchSide =
             branchSourceSide == ChainSide::Right ? ChainSide::Left : ChainSide::Right;
@@ -1678,6 +1909,10 @@ void TONE3000Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
             laneHasWork(lane(ChainSide::Left)) && laneHasWork(lane(ChainSide::Right));
       }
     }
+    // Blend path (chainCount > 2): fork all active lanes at once. No "both
+    // sides have work" gate here — with 3-4 lanes blended on purpose, an
+    // idle lane is the unusual case, not worth optimizing for.
+    rtParallelLaneGroup = rtChainCount > 2 && multiCore;
 
     // Hosts occasionally exceed the block size they promised in prepareToPlay.
     // Feed the chain stage in prepared-size slices so the boundary's internal
@@ -1855,6 +2090,10 @@ constexpr double kAutoBalanceTimeoutSeconds = 15.0;
 }  // namespace
 
 void TONE3000Processor::startAutoBalance() {
+  // Auto Balance is inherently pairwise, so it only ever runs at exactly 2
+  // lanes.
+  if (getChainCount() != 2)
+    return;
   // Reset is safe from the message thread: the audio thread only touches the
   // accumulators while the state is Listening, and the release-store below
   // publishes the zeroed accumulators together with the state flip.
@@ -1990,7 +2229,8 @@ constexpr float kAutoOffsetSilentMs = 0.05f;
 void TONE3000Processor::startAutoOffset() {
   // Offline renders must never print the probe's silence into the bounce,
   // and the measurement needs two live chains.
-  if (isNonRealtime() || !stereoEnabled.load())
+  // Align is inherently pairwise, so it only ever runs at exactly 2 lanes.
+  if (isNonRealtime() || getChainCount() != 2)
     return;
   autoOffset.arm();
 }

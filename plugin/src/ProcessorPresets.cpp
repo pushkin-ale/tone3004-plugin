@@ -13,7 +13,10 @@
 
 const std::vector<juce::String>& TONE3000Processor::presetParameterIds() {
   // chainSolo* stays out on purpose: solo is monitoring state, not tone,
-  // and a preset saved mid-audition must not load with a chain muted.
+  // and a preset saved mid-audition must not load with a chain soloed.
+  // chainMute*, unlike solo, IS captured: mute is a deliberate per-lane
+  // mix decision (silence this chain in the blend), not a transient
+  // audition aid, so it belongs in the saved tone.
   static const std::vector<juce::String> ids = {
       "inputLevel",     "outputLevel",      "outputBalance",
       "toneBass",       "toneMid",          "toneTreble",
@@ -26,6 +29,10 @@ const std::vector<juce::String>& TONE3000Processor::presetParameterIds() {
       "alignDiffuseEnabled",
       "chainPanLeft",   "chainPanRight",    "chainPanLinked",
       "chainInvertLeft", "chainInvertRight",
+      "chainLevelLeft", "chainLevelRight",  "chainLevelLane3", "chainLevelLane4",
+      "chainPanLane3",  "chainPanLane4",
+      "chainInvertLane3", "chainInvertLane4",
+      "chainMuteLeft",  "chainMuteRight",   "chainMuteLane3", "chainMuteLane4",
   };
   return ids;
 }
@@ -57,7 +64,7 @@ juce::var TONE3000Processor::savePreset(const juce::String& rawName) {
     return {};
 
   juce::ValueTree preset(PresetManager::kPresetTag);
-  preset.setProperty("schemaVersion", 1, nullptr);
+  preset.setProperty("schemaVersion", 2, nullptr);
 
   {
     juce::ScopedLock lock(chainMutex);
@@ -171,6 +178,7 @@ bool TONE3000Processor::loadPreset(const juce::String& presetId) {
     p->endChangeGesture();
   }
 
+  snapshotPresetBaseline();
   juce::Logger::writeToLog("[Presets] Loaded preset: " + activePresetName);
 
   // Tell hosts the current program moved so their program parameter/menus
@@ -231,8 +239,25 @@ bool TONE3000Processor::movePreset(const juce::String& presetId, int delta) {
   return true;
 }
 
+void TONE3000Processor::snapshotPresetBaseline() {
+  for (const auto& paramId : presetParameterIds())
+    if (auto* p = parameters.getParameter(paramId))
+      presetBaselineNormalized[paramId] = p->getValue();
+}
+
+float TONE3000Processor::getPresetBaselineValue(const juce::String& paramId) const {
+  const auto it = presetBaselineNormalized.find(paramId);
+  if (it != presetBaselineNormalized.end())
+    return it->second;
+  // Not a preset-managed parameter (Solo, calibration, oversampling, ...):
+  // there is no saved baseline for it, so "revert" means the factory default.
+  if (auto* p = parameters.getParameter(paramId))
+    return p->getDefaultValue();
+  return 0.0f;
+}
+
 bool TONE3000Processor::isChainAtDefault() const {
-  if (activePresetId.isNotEmpty() || stereoEnabled.load())
+  if (activePresetId.isNotEmpty() || isStereoMode())
     return false;
   for (const auto& l : lanes)
     for (const auto& b : l)
@@ -280,6 +305,7 @@ bool TONE3000Processor::resetToDefault() {
     }
   }
 
+  snapshotPresetBaseline();
   juce::Logger::writeToLog("[Presets] Reset to default");
   // The active preset is gone, so the host program index fell back (see
   // getCurrentProgram); keep host program displays in step.

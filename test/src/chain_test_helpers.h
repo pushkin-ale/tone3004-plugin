@@ -116,6 +116,32 @@ inline void seedStereoChains(ChainTestProcessor& proc, const std::vector<juce::S
   proc.restoreFromTree(state);
 }
 
+// Seed an N-lane rig (1-4 lanes) with the given IR blocks per lane (ids
+// only; tones/models are synthesized). General form of seedStereoChains for
+// the chainCount > 2 mixdown tests; lanes 0/1 use the same child names
+// ("ChainBlocks"/"RightChainBlocks") so a 2-entry call is interchangeable
+// with seedStereoChains.
+inline void seedLanes(ChainTestProcessor& proc,
+                      const std::vector<std::vector<juce::String>>& perLaneIds) {
+  jassert(perLaneIds.size() >= 1 && perLaneIds.size() <= 4);
+  static const char* kLaneChildNames[4] = {"ChainBlocks", "RightChainBlocks", "Chain3Blocks",
+                                           "Chain4Blocks"};
+
+  juce::ValueTree state("ChainSnapshot");
+  state.setProperty("chainCount", static_cast<int>(perLaneIds.size()), nullptr);
+  state.setProperty("stereoEnabled", perLaneIds.size() >= 2, nullptr);
+
+  int toneId = 1, modelId = 100;
+  for (size_t lane = 0; lane < perLaneIds.size(); ++lane) {
+    juce::ValueTree child(kLaneChildNames[lane]);
+    for (const auto& id : perLaneIds[lane])
+      child.appendChild(makeIrBlockTree(id, toneId++, modelId++), nullptr);
+    state.appendChild(child, nullptr);
+  }
+
+  proc.restoreFromTree(state);
+}
+
 // Wait until every tone block in both lanes reports loaded AND the chain-edit
 // mute has released. Restores hold the mute until their loads settle (plus a
 // grace period) on a *wall-clock* waiter; tests pump audio much faster than
@@ -126,7 +152,8 @@ inline bool waitForChainLoaded(TONE3000Processor& proc, int timeoutMs = 20000) {
   while (juce::Time::getMillisecondCounter() < deadline) {
     const juce::var state = proc.getChainState(-1);
     bool allLoaded = true;
-    for (const auto* lane : {state["chain"].getArray(), state["chainRight"].getArray()}) {
+    for (const auto* lane : {state["chain"].getArray(), state["chainRight"].getArray(),
+                             state["chain3"].getArray(), state["chain4"].getArray()}) {
       if (lane == nullptr)
         continue;
       for (const auto& item : *lane)

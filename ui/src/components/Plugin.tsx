@@ -53,6 +53,9 @@ export const Plugin: React.FC = () => {
   const {
     chain,
     chainRight,
+    chain3,
+    chain4,
+    chainCount,
     branch,
     canUndo,
     canRedo,
@@ -150,8 +153,8 @@ export const Plugin: React.FC = () => {
       },
     [showTuner, handleToggleTuner]
   );
-  const handleStereoToggle = useMemo(
-    () => closeTunerThen(actions.setStereoMode),
+  const handleChainCountChange = useMemo(
+    () => closeTunerThen(actions.setChainCount),
     [closeTunerThen, actions]
   );
   const handleUndo = useMemo(() => closeTunerThen(actions.undo), [closeTunerThen, actions]);
@@ -191,7 +194,7 @@ export const Plugin: React.FC = () => {
   // The add/swap browse flows and their pending targets.
   const loadFlow = useToneLoadFlow({
     actions,
-    stereoEnabled,
+    chainCount,
     requireConnection,
     setShowToneBrowser,
   });
@@ -444,8 +447,8 @@ export const Plugin: React.FC = () => {
           activePreset={activePreset}
           atDefault={atDefault}
           onReset={handleReset}
-          stereoEnabled={stereoEnabled}
-          onStereoToggle={handleStereoToggle}
+          chainCount={chainCount}
+          onChainCountChange={handleChainCountChange}
           showTuner={showTuner}
           onToggleTuner={handleToggleTuner}
           canUndo={canUndo}
@@ -532,8 +535,11 @@ export const Plugin: React.FC = () => {
                 <ChainActionsProvider value={chainActions}>
                   <ChainView
                     chain={chain}
-                    chainRight={stereoEnabled ? (chainRight ?? []) : null}
-                    branch={stereoEnabled ? branch : null}
+                    chainRight={chainCount >= 2 ? (chainRight ?? []) : null}
+                    chain3={chainCount >= 3 ? (chain3 ?? []) : null}
+                    chain4={chainCount >= 4 ? (chain4 ?? []) : null}
+                    chainCount={chainCount}
+                    branch={chainCount === 2 ? branch : null}
                     monoSum={monoSum}
                     canPaste={canPaste}
                     sampleRate={sampleRate}
@@ -569,7 +575,7 @@ export const Plugin: React.FC = () => {
         <Faceplate
           balanceActive={balanceActive}
           stereoOutput={stereoOutput}
-          stereoChains={stereoEnabled}
+          chainCount={chainCount}
           stereoInput={stereoInput}
           branched={branch != null}
           inputMode={inputMode}

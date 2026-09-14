@@ -32,7 +32,7 @@ inline ChainBlockType chainBlockTypeFromString(const juce::String& s) {
 // Which chain is being processed/edited in stereo mode.
 enum class ChainSide { Left, Right };
 
-constexpr int kNumLanes = 2;
+constexpr int kNumLanes = 4;
 inline int laneIndex(ChainSide side) { return side == ChainSide::Right ? 1 : 0; }
 
 // Wet-path fade time (see ChainBlock::wetFadeGain): every discontinuous

@@ -161,6 +161,7 @@ export const SpreadGroup: React.FC = () => {
                 scale={offsetMsScale}
                 defaultValue={SPREAD_OFFSET_DEFAULT}
                 onReset={resetDeck}
+                disableRightClickReset
                 help={HELP.spreadOffset}
                 onDragStateChange={onOffsetDrag}
               />

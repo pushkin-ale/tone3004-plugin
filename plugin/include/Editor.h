@@ -139,6 +139,20 @@ private:
   juce::WebToggleButtonRelay chainSoloRightRelay{"chainSoloRight"};
   juce::WebToggleButtonRelay chainInvertLeftRelay{"chainInvertLeft"};
   juce::WebToggleButtonRelay chainInvertRightRelay{"chainInvertRight"};
+  juce::WebSliderRelay chainLevelLeftRelay{"chainLevelLeft"};
+  juce::WebSliderRelay chainLevelRightRelay{"chainLevelRight"};
+  juce::WebToggleButtonRelay chainMuteLeftRelay{"chainMuteLeft"};
+  juce::WebToggleButtonRelay chainMuteRightRelay{"chainMuteRight"};
+  juce::WebSliderRelay chainPanLane3Relay{"chainPanLane3"};
+  juce::WebSliderRelay chainPanLane4Relay{"chainPanLane4"};
+  juce::WebToggleButtonRelay chainSoloLane3Relay{"chainSoloLane3"};
+  juce::WebToggleButtonRelay chainSoloLane4Relay{"chainSoloLane4"};
+  juce::WebToggleButtonRelay chainInvertLane3Relay{"chainInvertLane3"};
+  juce::WebToggleButtonRelay chainInvertLane4Relay{"chainInvertLane4"};
+  juce::WebSliderRelay chainLevelLane3Relay{"chainLevelLane3"};
+  juce::WebSliderRelay chainLevelLane4Relay{"chainLevelLane4"};
+  juce::WebToggleButtonRelay chainMuteLane3Relay{"chainMuteLane3"};
+  juce::WebToggleButtonRelay chainMuteLane4Relay{"chainMuteLane4"};
   juce::WebSliderRelay bassRelay{"toneBass"};
   juce::WebSliderRelay midRelay{"toneMid"};
   juce::WebSliderRelay trebleRelay{"toneTreble"};
@@ -205,6 +219,34 @@ private:
       *processor.parameters.getParameter("chainInvertLeft"), chainInvertLeftRelay, nullptr};
   juce::WebToggleButtonParameterAttachment chainInvertRightWebAttachment{
       *processor.parameters.getParameter("chainInvertRight"), chainInvertRightRelay, nullptr};
+  juce::WebSliderParameterAttachment chainLevelLeftWebAttachment{
+      *processor.parameters.getParameter("chainLevelLeft"), chainLevelLeftRelay, nullptr};
+  juce::WebSliderParameterAttachment chainLevelRightWebAttachment{
+      *processor.parameters.getParameter("chainLevelRight"), chainLevelRightRelay, nullptr};
+  juce::WebToggleButtonParameterAttachment chainMuteLeftWebAttachment{
+      *processor.parameters.getParameter("chainMuteLeft"), chainMuteLeftRelay, nullptr};
+  juce::WebToggleButtonParameterAttachment chainMuteRightWebAttachment{
+      *processor.parameters.getParameter("chainMuteRight"), chainMuteRightRelay, nullptr};
+  juce::WebSliderParameterAttachment chainPanLane3WebAttachment{
+      *processor.parameters.getParameter("chainPanLane3"), chainPanLane3Relay, nullptr};
+  juce::WebSliderParameterAttachment chainPanLane4WebAttachment{
+      *processor.parameters.getParameter("chainPanLane4"), chainPanLane4Relay, nullptr};
+  juce::WebToggleButtonParameterAttachment chainSoloLane3WebAttachment{
+      *processor.parameters.getParameter("chainSoloLane3"), chainSoloLane3Relay, nullptr};
+  juce::WebToggleButtonParameterAttachment chainSoloLane4WebAttachment{
+      *processor.parameters.getParameter("chainSoloLane4"), chainSoloLane4Relay, nullptr};
+  juce::WebToggleButtonParameterAttachment chainInvertLane3WebAttachment{
+      *processor.parameters.getParameter("chainInvertLane3"), chainInvertLane3Relay, nullptr};
+  juce::WebToggleButtonParameterAttachment chainInvertLane4WebAttachment{
+      *processor.parameters.getParameter("chainInvertLane4"), chainInvertLane4Relay, nullptr};
+  juce::WebSliderParameterAttachment chainLevelLane3WebAttachment{
+      *processor.parameters.getParameter("chainLevelLane3"), chainLevelLane3Relay, nullptr};
+  juce::WebSliderParameterAttachment chainLevelLane4WebAttachment{
+      *processor.parameters.getParameter("chainLevelLane4"), chainLevelLane4Relay, nullptr};
+  juce::WebToggleButtonParameterAttachment chainMuteLane3WebAttachment{
+      *processor.parameters.getParameter("chainMuteLane3"), chainMuteLane3Relay, nullptr};
+  juce::WebToggleButtonParameterAttachment chainMuteLane4WebAttachment{
+      *processor.parameters.getParameter("chainMuteLane4"), chainMuteLane4Relay, nullptr};
   juce::WebToggleButtonParameterAttachment gateEnabledWebAttachment{
       *processor.parameters.getParameter("gateEnabled"), gateEnabledRelay, nullptr};
   juce::WebToggleButtonParameterAttachment toneEqEnabledWebAttachment{

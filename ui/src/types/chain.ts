@@ -17,6 +17,20 @@
 export type ChainSide = 'left' | 'right';
 
 /**
+ * Lane name accepted by the general N-lane bridge functions
+ * (moveBlockToChain, duplicateBlock, pasteBlock, setActiveEditChain).
+ * Lanes 2/3 have no `ChainSide` equivalent: branch/swap/Align/Auto-Balance
+ * stay lanes-0/1-only concepts regardless of `chainCount`.
+ */
+export type LaneId = 'left' | 'right' | 'lane3' | 'lane4';
+
+const LANE_IDS: readonly LaneId[] = ['left', 'right', 'lane3', 'lane4'];
+
+export function laneIdForIndex(index: number): LaneId {
+  return LANE_IDS[index] ?? 'left';
+}
+
+/**
  * Per-block 6-band EQ. Runs on the block's wet signal after its model by
  * default (before the dry/wet mix), or between the block's
  * input gain and its model when `pre` is on.
@@ -243,8 +257,18 @@ export interface ChainState {
   atDefault: boolean;
   /** Active preset, absent when none is loaded. Changes with revision bumps. */
   preset?: ActivePreset;
+  /** Number of active parallel chain lanes (1-4). Replaces the old binary
+      stereoEnabled flag; `chainCount >= 2` is what stereoEnabled used to mean. */
+  chainCount: 1 | 2 | 3 | 4;
+  /** Legacy binary field, still sent by native during the transition; prefer
+      `chainCount >= 2`. */
   stereoEnabled: boolean;
+  /** Branch-only: which of lanes 0/1 is the trunk (branch/Align/Auto-Balance
+      stay pairwise concepts regardless of chainCount). */
   activeSide: ChainSide;
+  /** Which lane the editor is currently targeting (add-block target, etc.),
+      generalized for chainCount > 2. */
+  activeLaneIndex: number;
   /** True when a real stereo source feeds the plugin (stereo host bus or a
       stereo standalone input device). Drives the faceplate input-mode button
       and the dual input meters. */
@@ -273,12 +297,25 @@ export interface ChainState {
       48 kHz behind one resampling boundary). The EQ curve math needs it to
       mirror the audio exactly. */
   sampleRate: number;
-  /** Left lane (the only lane in mono mode). */
+  /** Lane 0 (the only lane at chainCount 1). */
   chain: ChainItem[];
-  /** Right lane; present only while stereo mode is on. */
+  /** Lane 1; present only while chainCount >= 2. */
   chainRight?: ChainItem[];
-  /** Active branch; absent when the chains are independent (or mono). */
+  /** Lane 2; present only while chainCount >= 3. */
+  chain3?: ChainItem[];
+  /** Lane 3; present only while chainCount >= 4. */
+  chain4?: ChainItem[];
+  /** Active branch; absent when the chains are independent (or mono).
+      Branching is a lanes-0/1-only concept, regardless of chainCount. */
   branch?: ChainBranch;
+}
+
+/** All active lanes in order, `chain`/`chainRight`/`chain3`/`chain4` sliced
+    down to `chainCount`. Convenience for array-driven rendering. */
+export function activeLanes(state: ChainState): ChainItem[][] {
+  return [state.chain, state.chainRight, state.chain3, state.chain4]
+    .slice(0, state.chainCount)
+    .map((lane) => lane ?? []);
 }
 
 /** Input channel mode (mirrors Processor::InputMode). */

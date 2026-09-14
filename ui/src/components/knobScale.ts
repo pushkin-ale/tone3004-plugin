@@ -107,3 +107,17 @@ export const panScale = (side: 'left' | 'right'): KnobScale => {
     editText: (n) => Math.round(toDisplay(n)).toString(),
   };
 };
+
+/**
+ * Full-range chain pan (lanes 3/4, which have no link/swap partner): hard
+ * left .. hard right across the whole 0..1 knob, 0.5 = center.
+ */
+export const fullPanScale: KnobScale = {
+  toDisplay: (n) => (n - 0.5) * 200,
+  fromDisplay: (d) => 0.5 + d / 200,
+  format: (n) => {
+    const amount = Math.round((n - 0.5) * 200);
+    return amount === 0 ? 'C' : `${Math.abs(amount)}${amount < 0 ? 'L' : 'R'}`;
+  },
+  editText: (n) => Math.round((n - 0.5) * 200).toString(),
+};

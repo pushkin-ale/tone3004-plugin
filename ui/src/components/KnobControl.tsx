@@ -7,6 +7,7 @@ import { percentScale } from './knobScale';
 import { helpProps, pinHelp, unpinHelp } from './helpText';
 import { GRAY, KNOB_LABEL_GAP, SURFACE_RAISED, WHITE } from './theme';
 import { getUiScale, rem } from '../hooks/useUiScale';
+import { useNativeFunction } from '../hooks/useFunction';
 
 /**
  * Knob interaction conventions (matching typical plugin UX):
@@ -16,16 +17,23 @@ import { getUiScale, rem } from '../hooks/useUiScale';
  *   the label the instant the pointer releases.
  * - Double-click opens inline text entry in real units (Enter commits,
  *   Escape cancels, blur commits).
- * - Alt/Option-click resets to the default value (when one is declared).
+ * - Alt/Option-click, or Cmd (Mac) / Ctrl (Windows) + click, resets to the
+ *   factory default value (when one is declared) — 0/center/unity,
+ *   regardless of any loaded preset.
+ * - Right-click reverts to whatever the currently-loaded preset (or DAW
+ *   session) actually saved for this parameter — an "undo my tweak" back to
+ *   the loaded tone, not the factory default. Knobs with no live
+ *   preset-baseline concept (paramId omitted, e.g. per-block gain/mix) fall
+ *   back to the factory default, same as Cmd/Ctrl-click.
  * No scroll-wheel support on purpose: knobs sit inside the horizontally
  * scrolling chain view, and hijacking wheel events there hurts more than it
  * helps.
  *
  * On a touch screen the two mouse-only gestures are replaced rather than
  * dropped:
- * - Double tap resets to the default (there is no Alt key). Detected from
- *   the pointer stream, not from `dblclick`, which WKWebView ties to its
- *   own double-tap handling.
+ * - Double tap resets to the factory default (there is no Alt/Cmd key or
+ *   right-click on touch). Detected from the pointer stream, not from
+ *   `dblclick`, which WKWebView ties to its own double-tap handling.
  * - Tapping the label under the knob opens the type-in editor (double tap
  *   is taken by the reset).
  * Both key off the gesture's own pointerType, so a mouse keeps desktop
@@ -50,11 +58,27 @@ interface KnobControlProps {
   /** Normalized-to-units mapping for the readout and text entry. Defaults
       to a plain percentage. */
   scale?: KnobScale;
-  /** Normalized default; enables Alt/Option-click reset. */
+  /** Normalized factory default; enables Alt/Option-click and Cmd/Ctrl-click
+      reset (and is the touch double-tap target, and the right-click
+      fallback when paramId is omitted). */
   defaultValue?: number;
-  /** Extra work on Alt/Option-click reset (after writing defaultValue). Used
-      by Spread/Align Offset to also restore the advanced deck defaults. */
+  /** Extra work on a reset-to-default gesture (after writing defaultValue).
+      Used by Spread/Align Offset to also restore the advanced deck
+      defaults. Does not run on a right-click preset-baseline reset. */
   onReset?: () => void;
+  /** APVTS parameter id backing this knob, when one exists. Enables the
+      right-click "revert to preset" gesture via a native lookup
+      (getPresetBaselineValue); knobs with no single global parameter (e.g.
+      per-chain-block gain/mix) omit this and right-click falls back to
+      defaultValue, same as Cmd/Ctrl-click. */
+  paramId?: string;
+  /** Opts out of the right-click reset gesture, leaving the contextmenu
+      event to bubble untouched. Used by knobs that live inside a group
+      that already overloads right-click for something else (the Spread/
+      Align Offset knob and its deck-panel siblings use right-click to open
+      the advanced controls deck; resetting the knob at the same time would
+      fight that). */
+  disableRightClickReset?: boolean;
   /** One-line hint for the faceplate help readout, shown while hovered or
       dragging (see helpText.ts). */
   help?: string;
@@ -115,6 +139,8 @@ export const KnobControl: React.FC<KnobControlProps> = ({
   help,
   labelBright = false,
   onReset,
+  paramId,
+  disableRightClickReset = false,
   onDragStateChange,
 }) => {
   const knobRef = useRef<HTMLDivElement>(null);
@@ -161,6 +187,13 @@ export const KnobControl: React.FC<KnobControlProps> = ({
   defaultValueRef.current = defaultValue;
   const onResetRef = useRef(onReset);
   onResetRef.current = onReset;
+  const paramIdRef = useRef(paramId);
+  paramIdRef.current = paramId;
+  const disableRightClickResetRef = useRef(disableRightClickReset);
+  disableRightClickResetRef.current = disableRightClickReset;
+  const getPresetBaseline = useNativeFunction<number>('getPresetBaselineValue');
+  const getPresetBaselineRef = useRef(getPresetBaseline);
+  getPresetBaselineRef.current = getPresetBaseline;
   const valueRef = useRef(value);
   valueRef.current = value;
   const minRef = useRef(min);
@@ -250,15 +283,35 @@ export const KnobControl: React.FC<KnobControlProps> = ({
       lastYRef.current = e.clientY;
     };
 
+    const applyResetValue = (next: number) => {
+      onChangeRef.current(next);
+      liveRef.current = next;
+      emittedRef.current = next;
+      setLiveValue(next);
+    };
+
     const resetToDefault = () => {
       const fallback = defaultValueRef.current;
       if (fallback === undefined) return false;
-      onChangeRef.current(fallback);
+      applyResetValue(fallback);
       onResetRef.current?.();
-      liveRef.current = fallback;
-      emittedRef.current = fallback;
-      setLiveValue(fallback);
       return true;
+    };
+
+    // Right-click: revert to the currently-loaded preset/session's saved
+    // value. Fetched fresh from native each time (no local caching) so it
+    // can never go stale after a preset load — see getPresetBaselineValue.
+    // Resolves async; a knob with no paramId (and so no live preset concept)
+    // falls straight back to the factory default.
+    const resetToPresetBaseline = () => {
+      const id = paramIdRef.current;
+      if (!id) {
+        resetToDefault();
+        return;
+      }
+      void getPresetBaselineRef.current(id).then((result) => {
+        if (typeof result === 'number') applyResetValue(result);
+      });
     };
 
     const handlePointerDown = (e: PointerEvent) => {
@@ -283,11 +336,12 @@ export const KnobControl: React.FC<KnobControlProps> = ({
           : { at: e.timeStamp, x: e.clientX, y: e.clientY };
         if (isDoubleTap && resetToDefault()) return;
       }
-      // Alt/Option-click: reset to default. The drag still engages beneath,
-      // which is harmless: releasing without moving stays at the default.
-      // onReset runs after so owners can restore sibling defaults (e.g. the
-      // Spread/Align advanced deck) in the same gesture.
-      if (!(e.altKey && resetToDefault())) {
+      // Alt/Option-click or Cmd(Mac)/Ctrl(Windows)-click: reset to the
+      // factory default. The drag still engages beneath, which is harmless:
+      // releasing without moving stays at the default. onReset runs after
+      // so owners can restore sibling defaults (e.g. the Spread/Align
+      // advanced deck) in the same gesture.
+      if (!((e.altKey || e.metaKey || e.ctrlKey) && resetToDefault())) {
         liveRef.current = valueRef.current;
         emittedRef.current = valueRef.current;
         setLiveValue(valueRef.current);
@@ -337,12 +391,25 @@ export const KnobControl: React.FC<KnobControlProps> = ({
       dragStateRef.current?.(false);
     };
 
+    // Right-click: suppress the OS/browser context menu and revert to the
+    // preset baseline instead. A native contextmenu event covers both mouse
+    // right-click and (on most platforms) the touch/trackpad long-press
+    // equivalent, so no separate touch path is needed here.
+    const handleContextMenu = (e: MouseEvent) => {
+      // Left to a group's own onContextMenu (e.g. Spread/Align's advanced
+      // deck toggle), which does its own preventDefault further up.
+      if (disableRightClickResetRef.current) return;
+      e.preventDefault();
+      resetToPresetBaseline();
+    };
+
     // Pointer events (not mouse events) so the drag state, and with it the
     // value readout and pinned hint, also engages for touch drags, which
     // never synthesize mouse events while moving.
     knobElement.addEventListener('selectstart', preventSelection);
     knobElement.addEventListener('dragstart', preventSelection);
     knobElement.addEventListener('pointerdown', handlePointerDown);
+    knobElement.addEventListener('contextmenu', handleContextMenu);
     document.addEventListener('pointerup', handlePointerUp);
     document.addEventListener('pointercancel', handlePointerUp);
 
@@ -350,6 +417,7 @@ export const KnobControl: React.FC<KnobControlProps> = ({
       knobElement.removeEventListener('selectstart', preventSelection);
       knobElement.removeEventListener('dragstart', preventSelection);
       knobElement.removeEventListener('pointerdown', handlePointerDown);
+      knobElement.removeEventListener('contextmenu', handleContextMenu);
       document.removeEventListener('pointerup', handlePointerUp);
       document.removeEventListener('pointercancel', handlePointerUp);
       window.removeEventListener('keydown', handleShift);

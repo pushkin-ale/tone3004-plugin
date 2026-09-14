@@ -143,7 +143,7 @@ TEST(ChainDuplicateTest, CrossLaneWorksInStereoOnlyAndRejectsBadSources) {
   EXPECT_TRUE(proc.duplicateChainBlock("not-a-block", "left", 0).empty());
 
   // Mono mode has no right lane to duplicate into.
-  proc.setStereoMode(false);
+  proc.setChainCount(1);
   EXPECT_TRUE(proc.duplicateChainBlock("blk-a", "right", 0).empty());
 }
 

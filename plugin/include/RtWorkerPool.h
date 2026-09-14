@@ -76,11 +76,12 @@ public:
   using JobFn = void (*)(void*);
 
   /** Slot registry capacity == the largest single fork. Concurrent forks
-      share the registry: at the design maximum (one lane fork publishing 1
-      job + two nested ×8 phase forks publishing 7 each) 15 slots are in
-      flight. A fork that finds the registry full runs the overflow jobs
-      inline immediately: still correct, just less parallel. */
-  static constexpr int kMaxJobs = 16;
+      share the registry: at the 4-lane design maximum (a 3-lane outer fork
+      + 4 lanes each independently phase-forking an 8x-oversampled NAM at 7
+      slots apiece) 31 slots can be in flight at once. A fork that finds the
+      registry full runs the overflow jobs inline immediately: still
+      correct, just less parallel. */
+  static constexpr int kMaxJobs = 32;
 
   RtWorkerPool() = default;
   ~RtWorkerPool() { stop(); }

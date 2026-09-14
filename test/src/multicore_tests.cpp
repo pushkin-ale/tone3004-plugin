@@ -63,6 +63,72 @@ juce::ValueTree makeStereoRigState() {
   return state;
 }
 
+// N-lane blend rig (chainCount > 2, see processLaneGroup/laneMixGains):
+// each lane gets its own amp+cab chain and a distinct sub-unity cab mix, the
+// same cross-lane-scratch-race isolation as makeStereoRigState above, now
+// exercised across up to 4 independently-forked lanes.
+juce::ValueTree makeBlendRigState(int count) {
+  static const char* kLaneChildNames[4] = {"ChainBlocks", "RightChainBlocks", "Chain3Blocks",
+                                           "Chain4Blocks"};
+  juce::ValueTree state("ChainSnapshot");
+  state.setProperty("chainCount", count, nullptr);
+
+  int toneId = 1, modelId = 100;
+  for (int i = 0; i < count; ++i) {
+    juce::ValueTree child(kLaneChildNames[i]);
+    child.appendChild(makeNamBlockTree("blk-amp-" + juce::String(i), toneId++, modelId++),
+                      nullptr);
+    auto cab = makeIrBlockTree("blk-cab-" + juce::String(i), toneId++, modelId++);
+    cab.setProperty("mix", 0.3f + 0.15f * static_cast<float>(i), nullptr);
+    child.appendChild(cab, nullptr);
+    state.appendChild(child, nullptr);
+  }
+  return state;
+}
+
+std::pair<std::vector<float>, std::vector<float>> runBlendRig(bool multiCore, int count,
+                                                              double hostRate, bool oversample,
+                                                              const std::vector<float>& in) {
+  ChainTestProcessor proc;
+  proc.setMultiCoreEnabled(multiCore, /*persist=*/false);
+  proc.setPlayConfigDetails(2, 2, hostRate, kBlock);
+  if (oversample) {
+    proc.parameters.getParameter("osEnabled")->setValueNotifyingHost(1.0f);
+    proc.parameters.getParameter("osFactor")->setValueNotifyingHost(1.0f);  // index 2 = 8x
+  }
+  proc.prepareToPlay(hostRate, kBlock);
+  proc.restoreFromTree(makeBlendRigState(count));
+  EXPECT_TRUE(waitForChainLoaded(proc)) << "blocks never finished loading from cache";
+  return processStereo(proc, in);
+}
+
+// 3/4-lane blend: processLaneGroup forks every active lane at once (see
+// rtParallelLaneGroup in runChainStage). Same bit-exactness contract as the
+// 2-lane fork above.
+TEST(MultiCoreTest, ThreeLaneBlendParallelMatchesSerialBitExact) {
+  const auto in = makeNoise(240 * kBlock, 13579, 0.1f);
+
+  const auto [sl, sr] = runBlendRig(false, 3, 48000.0, false, in);
+  const auto [pl, pr] = runBlendRig(true, 3, 48000.0, false, in);
+
+  EXPECT_EQ(settledDiff(sl, pl), 0.0f) << "left bus diverged under the parallel schedule";
+  EXPECT_EQ(settledDiff(sr, pr), 0.0f) << "right bus diverged under the parallel schedule";
+}
+
+// The worst-case concurrent slot demand this feature adds: 4 lanes each
+// independently phase-forking an 8x-oversampled NAM (3 outer-lane slots + 4
+// x 7 phase-fork slots = 31), the scenario that motivated bumping
+// RtWorkerPool::kMaxJobs from 16 to 32. Must still null exactly.
+TEST(MultiCoreTest, FourLaneBlendAt8xOversamplingParallelMatchesSerialBitExact) {
+  const auto in = makeNoise(120 * kBlock, 24680, 0.1f);
+
+  const auto [sl, sr] = runBlendRig(false, 4, kFs, true, in);
+  const auto [pl, pr] = runBlendRig(true, 4, kFs, true, in);
+
+  EXPECT_EQ(settledDiff(sl, pl), 0.0f) << "left bus diverged under the parallel schedule";
+  EXPECT_EQ(settledDiff(sr, pr), 0.0f) << "right bus diverged under the parallel schedule";
+}
+
 struct RigConfig {
   bool multiCore;
   bool branched;

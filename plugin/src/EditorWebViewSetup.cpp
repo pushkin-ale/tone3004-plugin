@@ -159,6 +159,20 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
       .withOptionsFrom(editor->chainSoloRightRelay)
       .withOptionsFrom(editor->chainInvertLeftRelay)
       .withOptionsFrom(editor->chainInvertRightRelay)
+      .withOptionsFrom(editor->chainLevelLeftRelay)
+      .withOptionsFrom(editor->chainLevelRightRelay)
+      .withOptionsFrom(editor->chainMuteLeftRelay)
+      .withOptionsFrom(editor->chainMuteRightRelay)
+      .withOptionsFrom(editor->chainPanLane3Relay)
+      .withOptionsFrom(editor->chainPanLane4Relay)
+      .withOptionsFrom(editor->chainSoloLane3Relay)
+      .withOptionsFrom(editor->chainSoloLane4Relay)
+      .withOptionsFrom(editor->chainInvertLane3Relay)
+      .withOptionsFrom(editor->chainInvertLane4Relay)
+      .withOptionsFrom(editor->chainLevelLane3Relay)
+      .withOptionsFrom(editor->chainLevelLane4Relay)
+      .withOptionsFrom(editor->chainMuteLane3Relay)
+      .withOptionsFrom(editor->chainMuteLane4Relay)
       .withOptionsFrom(editor->bassRelay)
       .withOptionsFrom(editor->midRelay)
       .withOptionsFrom(editor->trebleRelay)
@@ -252,13 +266,13 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
             return juce::var(editor->processor.reorderChainBlocks(newOrder));
           }))
       .withNativeFunction(
-          // (blockId, "left" | "right", targetIndex): drag across lanes.
+          // (blockId, "left" | "right" | "lane3" | "lane4", targetIndex): drag across lanes.
           "moveBlockToChain", guarded(3, false, [editor](const juce::Array<juce::var>& args) {
             return juce::var(editor->processor.moveBlockToChain(
                 args[0].toString().toStdString(), args[1].toString(), static_cast<int>(args[2])));
           }))
       .withNativeFunction(
-          // (sourceBlockId, "left" | "right", targetIndex): clone a live tone
+          // (sourceBlockId, "left" | "right" | "lane3" | "lane4", targetIndex): clone a live tone
           // block with all its settings (alt-drag duplicate). Returns the new
           // block id, "" on failure.
           "duplicateChainBlock",
@@ -274,7 +288,7 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
             return juce::var(editor->processor.copyChainBlock(args[0].toString().toStdString()));
           }))
       .withNativeFunction(
-          // ("left" | "right", targetIndex): rebuild the copied block there
+          // ("left" | "right" | "lane3" | "lane4", targetIndex): rebuild the copied block there
           // (an insert slot at the index is filled). Returns the new block
           // id, "" on failure (empty clipboard, right lane while mono).
           "pasteChainBlock",
@@ -299,9 +313,9 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
             return juce::var(editor->processor.clearChainBranch());
           }))
       .withNativeFunction(
-          "setStereoMode", guarded(1, false, [editor](const juce::Array<juce::var>& args) {
-            editor->processor.setStereoMode(coerceBool(args[0]));
-            return juce::var(true);
+          // Number of active parallel chain lanes (1-4).
+          "setChainCount", guarded(1, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(editor->processor.setChainCount(static_cast<int>(args[0])));
           }))
       .withNativeFunction(
           // ("stereo" | "left" | "right"): which channels of a stereo
@@ -449,6 +463,16 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
           // Undoable; false when already at default.
           "resetToDefault", guarded(0, false, [editor](const juce::Array<juce::var>&) {
             return juce::var(editor->processor.resetToDefault());
+          }))
+      .withNativeFunction(
+          // Right-click knob gesture: "undo my tweak" back to what the
+          // currently-loaded preset (or session) actually saved for this
+          // parameter, not the factory default. Falls back to the factory
+          // default for any id with no live preset-baseline concept (Solo,
+          // calibration, oversampling, ...) — see getPresetBaselineValue.
+          "getPresetBaselineValue", guarded(1, juce::var(0.0), [editor](const juce::Array<juce::var>& args) {
+            return juce::var(
+                static_cast<double>(editor->processor.getPresetBaselineValue(args[0].toString())));
           }))
       // --- Audio device settings (standalone only) ---------------------------
       // All of these route through the StandaloneAudioSettings controller,

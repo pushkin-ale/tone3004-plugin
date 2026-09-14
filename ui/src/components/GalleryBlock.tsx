@@ -18,7 +18,7 @@ import { RetryLoadBadge } from './RetryLoadBadge';
 import { meterId } from '../hooks/useMeters';
 import { useChainActions } from '../hooks/useChainActions';
 import { HELP, helpProps, toneTileHelp } from './helpText';
-import type { ChainSide, ToneBlock } from '../types/chain';
+import type { LaneId, ToneBlock } from '../types/chain';
 import { ChromeIconButton } from './ChromeIconButton';
 import { TileMenu } from './TileMenu';
 import type { TileMenuAnchor, TileMenuItem } from './TileMenu';
@@ -433,7 +433,7 @@ interface GalleryBlockProps {
   /** Position within the lane; keeps the sortable registry in sync. */
   index: number;
   /** The lane this tile sorts in. */
-  group: ChainSide;
+  group: LaneId;
   /** Tile edge, px. */
   size: number;
   /** Open the detail takeover for this block. */
@@ -580,7 +580,7 @@ interface AddTileProps {
   /** Position within the lane; keeps the sortable registry in sync. */
   index: number;
   /** The lane this tile sorts in. */
-  group: ChainSide;
+  group: LaneId;
   size: number;
   routing: AddTileRouting;
   onClick: () => void;

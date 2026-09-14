@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import type { useChainState } from './useChainState';
-import type { ChainSide } from '../types/chain';
+import type { LaneId } from '../types/chain';
 import type { Model, Tone } from '../types/tone';
 
 type ChainStateActions = ReturnType<typeof useChainState>['actions'];
@@ -66,7 +66,9 @@ const readDirectoryFiles = async (root: FileSystemDirectoryEntry): Promise<File[
 
 interface UseToneLoadFlowOptions {
   actions: ChainStateActions;
-  stereoEnabled: boolean;
+  /** Number of active parallel chain lanes (1-4); only worth telling native
+      the active lane when there's more than one. */
+  chainCount: number;
   /** The connection gate's action wrapper (see useConnectionGate). */
   requireConnection: (action: () => void | Promise<void>) => void;
   /** Open or close the in-plugin tone browser. */
@@ -80,7 +82,7 @@ interface UseToneLoadFlowOptions {
  */
 export function useToneLoadFlow({
   actions,
-  stereoEnabled,
+  chainCount,
   requireConnection,
   setShowToneBrowser,
 }: UseToneLoadFlowOptions) {
@@ -120,15 +122,15 @@ export function useToneLoadFlow({
   // side also goes to native state (it has to survive the OAuth redirect) as
   // the fallback for when the slot id goes stale, e.g. undone away mid-flow.
   const handleAddModel = useCallback(
-    (side: ChainSide, insertBlockId: string) => {
+    (lane: LaneId, insertBlockId: string) => {
       requireConnection(async () => {
         sessionStorage.removeItem(SWAP_STORAGE_KEY);
         sessionStorage.setItem(INSERT_TARGET_STORAGE_KEY, insertBlockId);
-        if (stereoEnabled) await actions.setActiveSide(side);
+        if (chainCount > 1) await actions.setActiveLane(lane);
         setShowToneBrowser(true);
       });
     },
-    [actions, requireConnection, setShowToneBrowser, stereoEnabled]
+    [actions, requireConnection, setShowToneBrowser, chainCount]
   );
 
   // Swap: remember the target block, then run the same browse flow as add.

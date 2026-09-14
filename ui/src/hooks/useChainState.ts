@@ -7,6 +7,7 @@ import type {
   ChainStateResponse,
   EqBand,
   InputMode,
+  LaneId,
 } from '../types/chain';
 import { isUnchanged, SLIM_SIZE_LITE } from '../types/chain';
 
@@ -26,6 +27,8 @@ const EMPTY_STATE: ChainState = {
   atDefault: true,
   stereoEnabled: false,
   activeSide: 'left',
+  chainCount: 1,
+  activeLaneIndex: 0,
   stereoInput: false,
   stereoOutput: true,
   standalone: false,
@@ -70,7 +73,7 @@ export function useChainState() {
       setBlockEqEnabled: backend.getPluginFunction('setBlockEqEnabled'),
       setBlockEqPre: backend.getPluginFunction('setBlockEqPre'),
       resetBlockEq: backend.getPluginFunction('resetBlockEq'),
-      setStereoMode: backend.getPluginFunction('setStereoMode'),
+      setChainCount: backend.getPluginFunction('setChainCount'),
       setInputMode: backend.getPluginFunction('setInputMode'),
       setBlockSlimSize: backend.getPluginFunction('setBlockSlimSize'),
       setNamSlimSizeDefault: backend.getPluginFunction('setNamSlimSizeDefault'),
@@ -174,28 +177,29 @@ export function useChainState() {
         run('removeChainBlock', () => native.removeChainBlock(blockId)),
       reorderBlocks: (orderedIds: string[]) =>
         run('reorderChainBlocks', () => native.reorderChainBlocks(orderedIds)),
-      /** Move a block into the other lane at the given index (stereo drag). */
-      moveBlockToChain: (blockId: string, side: ChainSide, index: number) =>
-        run<boolean>('moveBlockToChain', () => native.moveBlockToChain(blockId, side, index)),
-      /** Clone a live tone block (all settings + model) into `side` at
+      /** Move a block into the given lane at the given index (cross-lane drag). */
+      moveBlockToChain: (blockId: string, lane: LaneId, index: number) =>
+        run<boolean>('moveBlockToChain', () => native.moveBlockToChain(blockId, lane, index)),
+      /** Clone a live tone block (all settings + model) into `lane` at
           `index` (alt-drag duplicate). Landing on an insert slot fills it;
           anywhere else splices in. Resolves to the new blockId ('' on
           failure). */
-      duplicateBlock: (sourceBlockId: string, side: ChainSide, index: number) =>
+      duplicateBlock: (sourceBlockId: string, lane: LaneId, index: number) =>
         run<string>('duplicateChainBlock', () =>
-          native.duplicateChainBlock(sourceBlockId, side, index)
+          native.duplicateChainBlock(sourceBlockId, lane, index)
         ),
       /** Snapshot a block (tone + settings + model bytes) into the native
           block clipboard. Self-contained: paste keeps working after preset
           switches or deleting the source. `canPaste` flips via the resync. */
       copyBlock: (blockId: string) =>
         run<boolean>('copyChainBlock', () => native.copyChainBlock(blockId)),
-      /** Rebuild the copied block into `side` at `index` (an insert slot
+      /** Rebuild the copied block into `lane` at `index` (an insert slot
           there is filled). Resolves to the new blockId ('' on failure). */
-      pasteBlock: (side: ChainSide, index: number) =>
-        run<string>('pasteChainBlock', () => native.pasteChainBlock(side, index)),
-      setStereoMode: (enabled: boolean) =>
-        run('setStereoMode', () => native.setStereoMode(enabled)),
+      pasteBlock: (lane: LaneId, index: number) =>
+        run<string>('pasteChainBlock', () => native.pasteChainBlock(lane, index)),
+      /** Number of active parallel chain lanes (1-4). */
+      setChainCount: (count: 1 | 2 | 3 | 4) =>
+        run('setChainCount', () => native.setChainCount(count)),
       /** Which channels of a stereo source feed the plugin (faceplate button). */
       setInputMode: (mode: InputMode) => run('setInputMode', () => native.setInputMode(mode)),
       /** The block's NAM A2 size (0 = lite, 1 = full; see BlockParams.
@@ -210,8 +214,9 @@ export function useChainState() {
       /** Multi-core processing (machine-wide). Pure scheduling: applies
           instantly and persists on disk. */
       setMultiCore: (enabled: boolean) => run('setMultiCore', () => native.setMultiCore(enabled)),
-      setActiveSide: (side: ChainSide) =>
-        run('setActiveEditChain', () => native.setActiveEditChain(side)),
+      /** Which lane the editor targets (add-block target, etc.). */
+      setActiveLane: (lane: LaneId) =>
+        run('setActiveEditChain', () => native.setActiveEditChain(lane)),
       /** Swap the Left and Right chains wholesale (stereo only). Undoable. */
       swapChains: () => run<boolean>('swapChains', () => native.swapChains()),
       /** Branch the other lane off `side` after one of its tone blocks
@@ -262,6 +267,10 @@ export function useChainState() {
   return {
     chain: state.chain,
     chainRight: state.chainRight ?? null,
+    chain3: state.chain3 ?? null,
+    chain4: state.chain4 ?? null,
+    chainCount: state.chainCount,
+    activeLaneIndex: state.activeLaneIndex,
     branch: state.branch ?? null,
     canUndo: state.canUndo ?? false,
     canRedo: state.canRedo ?? false,

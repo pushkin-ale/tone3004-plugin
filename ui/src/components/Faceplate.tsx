@@ -300,6 +300,7 @@ const OutputGainKnob: React.FC<{
           thumb="secondary"
           scale={balanceDbScale}
           defaultValue={0.5}
+          paramId="outputBalance"
           help={HELP.outputBalance}
           onDragStateChange={onBalanceDrag}
         />
@@ -311,6 +312,7 @@ const OutputGainKnob: React.FC<{
         size={KNOB_SIZE_PRIMARY}
         scale={gainDbScale}
         defaultValue={0.5}
+        paramId="outputLevel"
         help={HELP.outputLevel}
         onDragStateChange={onLevelDrag}
       />
@@ -331,11 +333,17 @@ interface FaceplateProps {
       again). The Align group stays live: it shapes the mono sum of stereo
       chains. */
   stereoOutput: boolean;
-  /** Two independent chains are running (stereo mode); shows the auto
-      balance button and swaps the Spread group for the Align group.
-      Mono-mode spread doesn't need auto balance: both channels carry the
-      same chain, so their energy already matches. */
-  stereoChains: boolean;
+  /** Active parallel chain count (1-4). Drives the Spread/Align swap: Align
+      is a pairwise concept and only takes over at exactly 2 chains; Spread
+      (mono-to-stereo double) only makes sense with a single chain, so it
+      dims and goes inert at 3-4 chains the same way it does on a mono rig
+      (native bypasses both Align and Spread's image-stage processing once
+      more than 2 chains are blended, per the per-lane pan/level mixdown).
+      Auto balance likewise only applies at exactly 2 chains: mono-mode
+      spread doesn't need it (both channels carry the same chain, so their
+      energy already matches), and 3-4 chains already carry independent
+      per-lane Level trims. */
+  chainCount: 1 | 2 | 3 | 4;
   /** Plugin is fed a real stereo source; shows the input-mode button. */
   stereoInput: boolean;
   /** A chain branch is active; hides the "Stereo" input routing (the chain
@@ -350,7 +358,7 @@ interface FaceplateProps {
 export const Faceplate = React.memo(function Faceplate({
   balanceActive,
   stereoOutput,
-  stereoChains,
+  chainCount,
   stereoInput,
   branched,
   inputMode,
@@ -390,6 +398,7 @@ export const Faceplate = React.memo(function Faceplate({
           size={KNOB_SIZE_PRIMARY}
           scale={gainDbScale}
           defaultValue={0.5}
+          paramId="inputLevel"
           help={HELP.inputLevel}
           onDragStateChange={onInputDrag}
         />
@@ -418,6 +427,7 @@ export const Faceplate = React.memo(function Faceplate({
             thumb="secondary"
             scale={gateDbScale}
             defaultValue={gateDbScale.fromDisplay(-80)}
+            paramId="gateThreshold"
             help={HELP.gate}
             onDragStateChange={onGateDrag}
           />
@@ -453,6 +463,7 @@ export const Faceplate = React.memo(function Faceplate({
             size={KNOB_SIZE_PRIMARY}
             scale={toneScale}
             defaultValue={toneScale.fromDisplay(5)}
+            paramId="toneBass"
             help={HELP.toneBass}
             onDragStateChange={onBassDrag}
           />
@@ -463,6 +474,7 @@ export const Faceplate = React.memo(function Faceplate({
             size={KNOB_SIZE_PRIMARY}
             scale={toneScale}
             defaultValue={toneScale.fromDisplay(5)}
+            paramId="toneMid"
             help={HELP.toneMiddle}
             onDragStateChange={onMidDrag}
           />
@@ -473,6 +485,7 @@ export const Faceplate = React.memo(function Faceplate({
             size={KNOB_SIZE_PRIMARY}
             scale={toneScale}
             defaultValue={toneScale.fromDisplay(5)}
+            paramId="toneTreble"
             help={HELP.toneTreble}
             onDragStateChange={onTrebleDrag}
           />
@@ -484,20 +497,30 @@ export const Faceplate = React.memo(function Faceplate({
         />
       </div>
 
-      {/* Stereo-image slot: Spread in mono, Align in stereo. Fixed footprint
-          (IMAGE_GROUP_WIDTH) so mode switches never shift the plate. On a
-          mono rig only Spread dims and goes inert as a whole (the hover
-          hint says why): a double can't be heard on one channel. Align
-          stays live there: it shapes the mono sum of the two chains. */}
-      <div
-        className={uiOffClass(!stereoOutput && !stereoChains)}
-        style={{ transition: 'opacity 0.2s ease' }}
-        {...(!stereoOutput && !stereoChains ? helpProps(HELP.spreadMonoOutput) : {})}
-      >
-        {stereoChains ? <AlignGroup /> : <SpreadGroup />}
-      </div>
+      {/* Stereo-image slot: Spread in mono, Align at exactly 2 chains. Fixed
+          footprint (IMAGE_GROUP_WIDTH) so mode switches never shift the
+          plate. On a mono rig, or with 3-4 chains blended, Spread dims and
+          goes inert as a whole (the hover hint says why): a double can't be
+          heard on one channel, and Spread has no meaning once more than one
+          chain is already in the mix. Align stays live whenever it's
+          showing: it shapes the mono sum of the two chains regardless of
+          the output rig. */}
+      {(() => {
+        const alignActive = chainCount === 2;
+        const spreadInert = !alignActive && (!stereoOutput || chainCount !== 1);
+        const spreadInertHelp = chainCount !== 1 ? HELP.spreadMultiChain : HELP.spreadMonoOutput;
+        return (
+          <div
+            className={uiOffClass(spreadInert)}
+            style={{ transition: 'opacity 0.2s ease' }}
+            {...(spreadInert ? helpProps(spreadInertHelp) : {})}
+          >
+            {alignActive ? <AlignGroup /> : <SpreadGroup />}
+          </div>
+        );
+      })()}
 
-      <OutputGainKnob stereo={balanceActive} autoBalance={stereoChains} />
+      <OutputGainKnob stereo={balanceActive} autoBalance={chainCount === 2} />
     </div>
   );
 });

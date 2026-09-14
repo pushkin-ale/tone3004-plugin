@@ -173,8 +173,11 @@ public:
   bool retryModelLoad(const std::string& blockId);
   bool removeChainBlock(const std::string& blockId);
   bool reorderChainBlocks(const std::vector<std::string>& newOrder);
-  // Move a block into the other lane at the given index (stereo mode drag
-  // across chains). Engines move with the block; insert slots can't move.
+  // Move a block into lane `side` at the given index (drag across lanes;
+  // requires chainCount > 1). `side` is "left"/"right"/"lane3"/"lane4" (see
+  // laneIndexFromSideString); the source lane is found by searching for
+  // `blockId` among the *other* lanes. Engines move with the block; insert
+  // slots can't move.
   bool moveBlockToChain(const std::string& blockId, const juce::String& side, int index);
   // Clone a tone block (model, EQ, gains, mix, every persisted setting)
   // into `side` at `index` (absolute lane index, inserts included). A clone
@@ -195,7 +198,7 @@ public:
   // landing rules as duplicateChainBlock: an insert slot there is consumed,
   // anywhere else splices in). The paste gets a fresh id and loads its model
   // cache-first from the copied bytes. Returns the new id, "" on failure
-  // (empty clipboard, or the right lane while mono).
+  // (empty clipboard, or a lane the current chainCount can't reach).
   std::string pasteChainBlock(const juce::String& side, int index);
 
   // TONE3000 OAuth access token. Updated by the UI after the Select flow and
@@ -290,9 +293,13 @@ public:
   // Editor teardown: the webview can't send per-block disables while dying.
   void disableAllBlockSpectrums();
 
-  // Stereo mode: two independent Left/Right chains.
-  void setStereoMode(bool enabled);
-  bool isStereoMode() const { return stereoEnabled.load(); }
+  // Chain lane count (1-4 independent chains). Lanes beyond the requested
+  // count stay dormant (blocks kept in memory, not deleted) and re-engage
+  // when the count is raised again. Not an APVTS parameter: chain topology
+  // is structural, not a host-automatable knob.
+  bool setChainCount(int count);
+  int getChainCount() const { return chainCount.load(); }
+  bool isStereoMode() const { return chainCount.load() >= 2; }
 
   // Chain branching (stereo mode).
   // A single optional tap point: the *branch* lane takes its input from the
@@ -350,12 +357,13 @@ public:
   // plugin-window chrome, which visibly misplaces it.
   std::atomic<int> editorExtraHeight{36};
 
-  // Which lane loadTone falls back to ("left"/"right") when no valid target
-  // insert id is supplied. The UI sets this before launching the Select flow
-  // so the choice survives the OAuth redirect. Not a view mode and not part
-  // of undo history.
+  // Which lane loadTone falls back to ("left"/"right"/"lane3"/"lane4") when
+  // no valid target insert id is supplied. The UI sets this before launching
+  // the Select flow so the choice survives the OAuth redirect. Not a view
+  // mode and not part of undo history.
   void setActiveEditChain(const juce::String& side);
-  // Swap the Left and Right chains wholesale (stereo mode only). Undoable.
+  // Swap the Left and Right chains wholesale (lanes 0/1; requires chainCount
+  // >= 2). Undoable. Lanes 2/3, if active, are untouched.
   bool swapChains();
 
   // Undo/redo over chain edits (structure, tones, params, EQ, stereo mode).
@@ -395,6 +403,15 @@ public:
     presetManager = PresetManager(baseDir);
     hostProgramInfoCache.clear();
   }
+
+  // Normalized [0,1] value paramId held right after the last "starting
+  // point" event (construction, loadPreset, resetToDefault, a host state
+  // restore) — what the right-click "revert to preset" knob gesture reverts
+  // to. Falls back to the parameter's own factory default for any id outside
+  // presetParameterIds() (Solo, calibration, oversampling, etc.) so the
+  // gesture is uniform across every knob even where no live preset-baseline
+  // concept exists.
+  float getPresetBaselineValue(const juce::String& paramId) const;
 
   // Tuner: enabled by the UI while the tuner screen is visible. Reads the raw
   // (pre-gain, pre-gate) input so gating never starves the pitch detector.
@@ -616,6 +633,14 @@ private:
                        Lane& localBlocks, juce::AudioBuffer<float>& localBuffer,
                        juce::AudioBuffer<float>& localScratch, int localBeginIdx);
 
+  // The N-way generalization of processLanePair, for the blend path
+  // (chainCount > 2): every one of the first `count` lanes runs
+  // independently over its own laneOutputScratch[i]/laneDryScratch[i], with
+  // no pairing-up, so all of them can fork across the worker pool at once
+  // (see rtParallelLaneGroup). Job 0 always runs on the calling (audio)
+  // thread. Caller holds chainMutex.
+  void processLaneGroup(int count);
+
   // The whole chain stage at the chain rate: lane L (and lane R in stereo
   // mode) over the given channel pointers. Called either directly (48k host)
   // or as the boundary resampler's encapsulated callback. `inputs`/`outputs`
@@ -677,6 +702,12 @@ private:
   // Caller holds chainMutex and has already recorded history.
   std::string landToneBlock(std::unique_ptr<ChainBlock> block, const juce::String& side,
                             int index);
+
+  // Parse a UI lane-side string into a lane index: "left"->0, "right"->1,
+  // "lane3"->2, "lane4"->3; anything else defaults to 0. Central so every
+  // side-keyed API (loadTone target resolution, moveBlockToChain,
+  // duplicate/paste, setActiveEditChain) agrees on the same vocabulary.
+  static int laneIndexFromSideString(const juce::String& side);
 
   // State (de)serialization helpers.
   // serializeBlockSettings/applyBlockSettings cover everything user-editable
@@ -745,7 +776,8 @@ private:
   // Toggle the enabled flag of a lane's Nth tone block (0-based, insert
   // slots skipped). Positional so mappings survive tone swaps and preset
   // loads. No-op when the lane is shorter than N, and for the Right lane
-  // outside stereo mode, so an inert lane is never edited invisibly.
+  // outside chainCount >= 2, so an inert lane is never edited invisibly.
+  // MIDI mapping only reaches lanes 0/1 (no MIDI UI for lanes 2/3 yet).
   bool toggleBlockPower(int position, bool rightLane);
 
   // Preset internals (ProcessorPresets.cpp).
@@ -762,11 +794,21 @@ private:
   // top bar's New button. Caller must hold chainMutex.
   bool isChainAtDefault() const;
 
+  // Snapshots every presetParameterIds() value into presetBaselineNormalized.
+  // Called after anything that lands the faceplate on a new "starting point"
+  // (construction, loadPreset, resetToDefault, a host state restore) so the
+  // right-click "revert to preset" knob gesture always targets what the
+  // *current* preset/session actually saved, not whatever loaded first.
+  void snapshotPresetBaseline();
+
   PresetManager presetManager;
   // Shown in the preset pill; guarded by chainMutex (written on the message
   // thread, read by getChainState).
   juce::String activePresetId;
   juce::String activePresetName;
+  // See snapshotPresetBaseline/getPresetBaselineValue above. std::map (not
+  // unordered_map): juce::String has no std::hash specialization.
+  std::map<juce::String, float> presetBaselineNormalized;
 
   // Host program API internals (ProcessorPresets.cpp). The count is a hard
   // constant: JUCE's VST3 wrapper sizes its program parameter once at
@@ -804,17 +846,29 @@ private:
   // would play its Left chain alone instead of the mono sum.
   std::atomic<bool> standaloneMonoOutput{false};
 
-  // The two chains: lanes[0] = Left/primary (the only lane in mono mode),
-  // lanes[1] = Right (stereo mode). Kept as one array so per-lane logic
-  // (find, meters, serialization, reconciliation) is written once.
+  // The lanes: lanes[0] = Left/primary (the only lane at chainCount == 1),
+  // lanes[1] = Right (chainCount >= 2), lanes[2]/[3] = the 3rd/4th lanes
+  // (chainCount >= 3/4). Kept as one array so per-lane logic (find, meters,
+  // serialization, reconciliation) is written once. General N-lane code
+  // indexes this with a plain int; ChainSide stays the vocabulary only for
+  // the permanently-pairwise APIs (branch, swap, align, auto-balance).
   std::array<Lane, kNumLanes> lanes;
-  Lane& lane(ChainSide side) { return lanes[static_cast<size_t>(laneIndex(side))]; }
-  const Lane& lane(ChainSide side) const { return lanes[static_cast<size_t>(laneIndex(side))]; }
+  Lane& lane(int index) {
+    jassert(index >= 0 && index < kNumLanes);
+    return lanes[static_cast<size_t>(index)];
+  }
+  const Lane& lane(int index) const {
+    jassert(index >= 0 && index < kNumLanes);
+    return lanes[static_cast<size_t>(index)];
+  }
+  Lane& lane(ChainSide side) { return lane(laneIndex(side)); }
+  const Lane& lane(ChainSide side) const { return lane(laneIndex(side)); }
 
-  std::atomic<bool> stereoEnabled{false};
+  // Number of active lanes (1-4). See setChainCount/getChainCount/isStereoMode.
+  std::atomic<int> chainCount{1};
   // Which lane loadTone inserts into. Set by the UI before launching the
   // Select flow (the choice must survive the OAuth redirect); not a view mode.
-  ChainSide pendingAddSide{ChainSide::Left};
+  int pendingAddLane{0};
   juce::CriticalSection chainMutex;
 
   // Chain branch state (see the public setChainBranch).
@@ -912,11 +966,21 @@ private:
   // (a mono rig hears them summed; see processImageStage).
   int rtChainChannels = 2;
   bool rtStereoChains = false;
+  // Active lane count for this callback (chainCount.load(), cached like the
+  // fields above); rtStereoChains is just rtChainCount >= 2. Drives the
+  // processChainStage fork between the pinned <=2-lane path and the N-lane
+  // blend path (see processLaneGroup).
+  int rtChainCount = 1;
   // True when this callback's chain stage should fork the two lanes across
   // cores (see RtWorkerPool.h): multi-core enabled, workers healthy, stereo
   // chains active, and both sides of the parallel section actually carry
   // work. Resolved once per processBlock under chainMutex.
   bool rtParallelLanes = false;
+  // Same idea as rtParallelLanes, for the N-lane blend path (chainCount > 2):
+  // multi-core enabled and workers healthy. Unlike rtParallelLanes this
+  // skips the "both sides have work" check — with 3-4 lanes blended on
+  // purpose, an idle lane is the unusual case, not worth optimizing for.
+  bool rtParallelLaneGroup = false;
   // Per-callback pool handle for NAM phase forks (see NamEngine::process):
   // &rtWorkerPool when multi-core is enabled and workers are up, nullptr
   // otherwise (phases run serially). Unlike the lane fork this doesn't need
@@ -995,6 +1059,8 @@ private:
     std::atomic<float>* chainSoloRight = nullptr;
     std::atomic<float>* chainInvertLeft = nullptr;
     std::atomic<float>* chainInvertRight = nullptr;
+    std::atomic<float>* chainMuteLeft = nullptr;
+    std::atomic<float>* chainMuteRight = nullptr;
     std::atomic<float>* toneBass = nullptr;
     std::atomic<float>* toneMid = nullptr;
     std::atomic<float>* toneTreble = nullptr;
@@ -1007,6 +1073,23 @@ private:
     std::atomic<float>* osEnabled = nullptr;
     std::atomic<float>* osFactor = nullptr;
   } paramRefs;
+
+  // Per-lane pan/level/solo/invert/mute atomics feeding the N-lane blend path
+  // (chainCount > 2; see laneMixGains). Lanes 0/1 point at the same
+  // chainPan/Solo/Invert/MuteLeft/Right atomics the <=2-lane path already
+  // uses (one parameter each, shared by both paths) plus the new
+  // chainLevelLeft/Right; lanes 2/3 are entirely new parameters. Kept
+  // separate from `paramRefs` above (rather than migrating chainPanLeft etc.
+  // into this array) so the pinned <=2-lane path's fields, and the code that
+  // reads them, stay byte-for-byte untouched.
+  struct LaneMixParamRefs {
+    std::atomic<float>* pan = nullptr;
+    std::atomic<float>* level = nullptr;
+    std::atomic<float>* solo = nullptr;
+    std::atomic<float>* invert = nullptr;
+    std::atomic<float>* mute = nullptr;
+  };
+  std::array<LaneMixParamRefs, kNumLanes> laneMixParamRefs;
   void resolveParamRefs();
 
   /** The oversampling factor the osEnabled/osFactor parameters currently
@@ -1046,6 +1129,19 @@ private:
   bool cacheChainSoloRight = false;
   bool cacheChainInvertLeft = false;
   bool cacheChainInvertRight = false;
+  bool cacheChainMuteLeft = false;
+  bool cacheChainMuteRight = false;
+  // Per-block cache for the N-lane blend path (chainCount > 2), refreshed
+  // from laneMixParamRefs alongside the fields above. Unlike those fields,
+  // this is read for every active lane, lanes 0/1 included.
+  struct CachedLaneMixParams {
+    float pan = 0.5f;
+    float level = 0.5f;
+    bool solo = false;
+    bool invert = false;
+    bool mute = false;
+  };
+  std::array<CachedLaneMixParams, kNumLanes> cacheLaneMix;
   float cacheBassTone = 5.0f;
   float cacheMidTone = 5.0f;
   float cacheTrebleTone = 5.0f;
@@ -1077,6 +1173,14 @@ private:
   // disjoint scratch and can process concurrently; each stays 2-channel
   // because mono mode runs a (possibly stereo) buffer through lane 0 alone.
   std::array<juce::AudioBuffer<float>, kNumLanes> laneDryScratch;
+
+  // Per-lane processed output for the N-lane blend path (chainCount > 2; see
+  // processLaneGroup and the processChainStage branch that fills these from
+  // the mono-summed input, forks all active lanes across it, then pan/level
+  // sums them into the 2-channel output). Mono (1 channel), chain-domain
+  // sized like laneDryScratch. Unused, and left unsized, at chainCount <= 2 —
+  // that path keeps processing in place on outputs[0]/outputs[1] as before.
+  std::array<juce::AudioBuffer<float>, kNumLanes> laneOutputScratch;
   double hostSampleRate = 48000.0;  // Default, updated dynamically in prepareToPlay
 
   // Default NAM A2 size for new blocks (see setNamSlimSizeDefault). Atomic:

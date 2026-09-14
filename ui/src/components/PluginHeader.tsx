@@ -4,8 +4,8 @@ import { Undo2, Redo2 } from './icons';
 import { AccountMenu } from './AccountMenu';
 import { IconButton } from './IconButton';
 import { PresetBar } from './PresetBar';
-import { StereoModeToggle } from './StereoModeToggle';
-import { HELP } from './helpText';
+import { SegmentedControl } from './controls';
+import { HELP, helpProps } from './helpText';
 import { BORDER } from './theme';
 import type { usePresets } from '../hooks/usePresets';
 import type { ActivePreset } from '../types/chain';
@@ -35,8 +35,8 @@ interface PluginHeaderProps {
   /** Greys out the preset bar's New button (see PresetBar). */
   atDefault: boolean;
   onReset: () => void;
-  stereoEnabled: boolean;
-  onStereoToggle: (enabled: boolean) => void;
+  chainCount: 1 | 2 | 3 | 4;
+  onChainCountChange: (count: 1 | 2 | 3 | 4) => void;
   showTuner: boolean;
   onToggleTuner: (show: boolean) => void;
   canUndo: boolean;
@@ -60,8 +60,8 @@ export const PluginHeader = React.memo(function PluginHeader({
   activePreset,
   atDefault,
   onReset,
-  stereoEnabled,
-  onStereoToggle,
+  chainCount,
+  onChainCountChange,
   showTuner,
   onToggleTuner,
   canUndo,
@@ -110,7 +110,19 @@ export const PluginHeader = React.memo(function PluginHeader({
           onMove={presetStore.actions.move}
           onReset={onReset}
         />
-        <StereoModeToggle stereoEnabled={stereoEnabled} onToggle={onStereoToggle} />
+        <div {...helpProps(HELP.chainCount)}>
+          <SegmentedControl
+            ariaLabel="Chain count"
+            value={String(chainCount)}
+            options={[
+              { value: '1', label: '1' },
+              { value: '2', label: '2' },
+              { value: '3', label: '3' },
+              { value: '4', label: '4' },
+            ]}
+            onChange={(value) => onChainCountChange(Number(value) as 1 | 2 | 3 | 4)}
+          />
+        </div>
         <IconButton
           onClick={() => onToggleTuner(!showTuner)}
           help={HELP.tuner}

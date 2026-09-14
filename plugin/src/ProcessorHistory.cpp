@@ -15,7 +15,7 @@
 
 juce::ValueTree TONE3000Processor::captureChainSnapshot(bool includeModelData) const {
   juce::ValueTree snapshot("ChainSnapshot");
-  snapshot.setProperty("stereoEnabled", stereoEnabled.load(), nullptr);
+  snapshot.setProperty("chainCount", chainCount.load(), nullptr);
   // Branch routing travels with the chains (undo, presets, DAW state all
   // share this shape). Empty branchAfterBlockId = independent chains.
   snapshot.setProperty("branchSide",
@@ -23,12 +23,20 @@ juce::ValueTree TONE3000Processor::captureChainSnapshot(bool includeModelData) c
   snapshot.setProperty("branchAfterBlockId", juce::String(branchAfterBlockId), nullptr);
 
   juce::ValueTree left("ChainBlocks");
-  serializeChainToTree(lane(ChainSide::Left), left, includeModelData);
+  serializeChainToTree(lane(0), left, includeModelData);
   snapshot.appendChild(left, nullptr);
 
   juce::ValueTree right("RightChainBlocks");
-  serializeChainToTree(lane(ChainSide::Right), right, includeModelData);
+  serializeChainToTree(lane(1), right, includeModelData);
   snapshot.appendChild(right, nullptr);
+
+  juce::ValueTree chain3("Chain3Blocks");
+  serializeChainToTree(lane(2), chain3, includeModelData);
+  snapshot.appendChild(chain3, nullptr);
+
+  juce::ValueTree chain4("Chain4Blocks");
+  serializeChainToTree(lane(3), chain4, includeModelData);
+  snapshot.appendChild(chain4, nullptr);
 
   return snapshot;
 }
@@ -224,17 +232,22 @@ TONE3000Processor::Lane TONE3000Processor::restoreChainSnapshot(const juce::Valu
   if (!snapshot.isValid())
     return retired;
 
-  reconcileChainFromTree(snapshot.getChildWithName("ChainBlocks"), lane(ChainSide::Left), retired);
-  reconcileChainFromTree(snapshot.getChildWithName("RightChainBlocks"), lane(ChainSide::Right),
-                         retired);
+  reconcileChainFromTree(snapshot.getChildWithName("ChainBlocks"), lane(0), retired);
+  reconcileChainFromTree(snapshot.getChildWithName("RightChainBlocks"), lane(1), retired);
+  reconcileChainFromTree(snapshot.getChildWithName("Chain3Blocks"), lane(2), retired);
+  reconcileChainFromTree(snapshot.getChildWithName("Chain4Blocks"), lane(3), retired);
 
-  const bool wasStereo = stereoEnabled.load();
-  const bool snapStereo = static_cast<bool>(snapshot.getProperty("stereoEnabled", false));
+  const int previousCount = chainCount.load();
+  // Legacy snapshots (pre-lane-count builds) only ever carried the binary
+  // stereoEnabled flag; missing chainCount infers 2 or 1 lanes from it.
+  int snapCount = static_cast<int>(snapshot.getProperty("chainCount", -1));
+  if (snapCount < 0)
+    snapCount = static_cast<bool>(snapshot.getProperty("stereoEnabled", false)) ? 2 : 1;
+  snapCount = juce::jlimit(1, kNumLanes, snapCount);
 
-  auto& right = lane(ChainSide::Right);
-  stereoEnabled.store(snapStereo);
-  if (!snapStereo)
-    pendingAddSide = ChainSide::Left;
+  chainCount.store(snapCount);
+  if (pendingAddLane >= snapCount)
+    pendingAddLane = 0;
 
   // Branch routing rides the snapshot. Alignment validates it against the
   // freshly reconciled trunk lane; a stale id (snapshot from a chain that no
@@ -257,10 +270,10 @@ TONE3000Processor::Lane TONE3000Processor::restoreChainSnapshot(const juce::Valu
   if (rtBranchTapIndex >= 0 && getInputMode() == InputMode::Stereo)
     inputMode.store(static_cast<int>(InputMode::Left));
 
-  // Mirrors setStereoMode: the right chain's engines must be ready before the
-  // audio thread starts running them.
-  if (snapStereo && !wasStereo)
-    prepareChain(right);
+  // Mirrors setChainCount: every newly-activated lane's engines must be
+  // ready before the audio thread starts running them.
+  for (int i = previousCount; i < snapCount; ++i)
+    prepareChain(lane(i));
 
   // Restores can add/remove/retire IR blocks wholesale (undo/redo, presets,
   // project load), so resync the host-facing tail length.

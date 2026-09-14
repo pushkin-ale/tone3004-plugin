@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react';
-import type { BlockParamName, ChainSide, EqBand, ToneBlock } from '../types/chain';
+import type { BlockParamName, ChainSide, EqBand, LaneId, ToneBlock } from '../types/chain';
 import type { Model, Tone } from '../types/tone';
 
 /**
@@ -14,7 +14,7 @@ import type { Model, Tone } from '../types/tone';
  */
 export interface ChainActions {
   /** Launch the Select flow, adding into the clicked insert slot. */
-  addModel: (side: ChainSide, insertBlockId: string) => void;
+  addModel: (lane: LaneId, insertBlockId: string) => void;
   /** Load a drop on a tile: a .nam / .wav file (NAM must be A2), or a folder
       of them (one block, one model per file). An insert slot adds; an
       existing tone tile swaps in place. Resolves to a user-facing error
@@ -33,19 +33,19 @@ export interface ChainActions {
   shareBlock: (block: ToneBlock) => Promise<boolean>;
   /** Reorder one lane (full order including its insert slot). */
   reorderBlocks: (orderedIds: string[]) => void;
-  /** Move a block into the other lane at the given index (stereo drag). */
-  moveBlock: (blockId: string, side: ChainSide, index: number) => void;
-  /** Clone a live tone block (all settings + model) into `side` at `index`
+  /** Move a block into the given lane at the given index (cross-lane drag). */
+  moveBlock: (blockId: string, lane: LaneId, index: number) => void;
+  /** Clone a live tone block (all settings + model) into `lane` at `index`
       (alt-drag duplicate). An insert slot there is filled, otherwise the
       clone splices in. */
-  duplicateBlock: (sourceBlockId: string, side: ChainSide, index: number) => void;
+  duplicateBlock: (sourceBlockId: string, lane: LaneId, index: number) => void;
   /** Copy a block into the native block clipboard (tone + settings + model
       bytes). The snapshot is self-contained, so pasting keeps working after
       preset switches or deleting the source block. */
   copyBlock: (blockId: string) => void;
-  /** Paste the copied block into `side` at `index` (the insert slot there
+  /** Paste the copied block into `lane` at `index` (the insert slot there
       is filled). Gate on `canPaste` from useChainState. */
-  pasteBlock: (side: ChainSide, index: number) => void;
+  pasteBlock: (lane: LaneId, index: number) => void;
   /** Swap the Left and Right chains wholesale (stereo only). */
   swapChains: () => void;
   /** Branch the other lane off `side` after one of its tone blocks (stereo

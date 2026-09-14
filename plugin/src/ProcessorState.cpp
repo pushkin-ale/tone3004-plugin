@@ -23,7 +23,7 @@ constexpr char kStateMagic[] = {'T', '3', 'K', 'B'};
 
 // Bump when the TONE3000State tree changes shape. Readers ignore state from a
 // newer schema rather than guessing at it.
-constexpr int kStateSchemaVersion = 1;
+constexpr int kStateSchemaVersion = 2;
 
 juce::PropertiesFile::Options userSettingsOptions() {
   juce::PropertiesFile::Options options;
@@ -270,6 +270,9 @@ void TONE3000Processor::setStateInformation(const void* data, int sizeInBytes) {
     parameters.replaceState(parameterState);
     DBG("Parameters restored from state");
   }
+  // Whatever the host/session just restored becomes the new right-click
+  // "revert to preset" target, matching loadPreset()'s own snapshot.
+  snapshotPresetBaseline();
 
   inputMode.store(static_cast<int>(
       inputModeFromString(state.getProperty("inputMode").toString())));
@@ -302,7 +305,7 @@ void TONE3000Processor::setStateInformation(const void* data, int sizeInBytes) {
 
     retired = restoreChainSnapshot(snapshot);  // updates latency, bumps revision
 
-    pendingAddSide = ChainSide::Left;
+    pendingAddLane = 0;
     activePresetId = state.getProperty("activePresetId").toString();
     activePresetName = state.getProperty("activePresetName").toString();
     // A project/state load replaces the whole session; undoing across it
